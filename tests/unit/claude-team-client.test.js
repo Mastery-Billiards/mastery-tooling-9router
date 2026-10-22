@@ -54,3 +54,54 @@ describe("Claude Team API client", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 });
+
+
+it("retries a transient GET transport failure with a fresh timeout signal", async () => {
+  vi.useFakeTimers();
+  try {
+    const fetch = vi.fn().mockRejectedValueOnce(Object.assign(new Error("private remote detail"), { cause: { code: "ECONNRESET" } })).mockResolvedValueOnce(response({ ok: true }));
+    const result = createTeamClient("private-session", null, fetch).account();
+    await vi.runAllTimersAsync();
+    await expect(result).resolves.toEqual({ ok: true });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[0][1].signal).not.toBe(fetch.mock.calls[1][1].signal);
+  } finally { vi.useRealTimers(); }
+});
+
+it("reports endpoint and safe network cause after bounded read retries", async () => {
+  vi.useFakeTimers();
+  try {
+    const fetch = vi.fn().mockRejectedValue(Object.assign(new Error("private-session"), { cause: { code: "ENOTFOUND" } }));
+    const assertion = expect(createTeamClient("private-session", null, fetch).account()).rejects.toThrow("Claude admin account: network error (ENOTFOUND). Read request failed");
+    await vi.runAllTimersAsync(); await assertion;
+    expect(fetch).toHaveBeenCalledTimes(2);
+  } finally { vi.useRealTimers(); }
+});
+
+it("never replays seat or reset writes after a timeout or a lost body", async () => {
+  const fetch = vi.fn().mockRejectedValue(Object.assign(new Error("private-session"), { name: "TimeoutError" }));
+  const client = createTeamClient("private-session", null, fetch);
+  await expect(client.setSeat(org, org, "team_standard")).rejects.toThrow("Write outcome is unknown; reconcile the pending operation");
+  expect(fetch).toHaveBeenCalledTimes(1);
+  fetch.mockClear();
+  await expect(client.reset({ accessToken: "private-token" }, org, "grant", "request")).rejects.toThrow("write was not automatically retried");
+  expect(fetch).toHaveBeenCalledTimes(1);
+  fetch.mockClear(); fetch.mockResolvedValue({ ok: true, json: async () => { throw Object.assign(new Error("private"), { cause: { code: "UND_ERR_SOCKET" } }); } });
+  await expect(client.setSeat(org, org, "unassigned")).rejects.toThrow("Write outcome is unknown");
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it("retries read gateway errors but never retries authentication or Cloudflare failures", async () => {
+  vi.useFakeTimers();
+  try {
+    const fetch = vi.fn().mockResolvedValueOnce({ ok: false, status: 503 }).mockResolvedValueOnce(response({}));
+    const result = createTeamClient("private-session", null, fetch).account();
+    await vi.runAllTimersAsync(); await result;
+    expect(fetch).toHaveBeenCalledTimes(2);
+    for (const status of [401, 403]) {
+      fetch.mockClear(); fetch.mockResolvedValue({ ok: false, status, headers: new Headers({ "cf-mitigated": "challenge" }) });
+      await expect(createTeamClient("private-session", null, fetch).account()).rejects.toThrow(`HTTP ${status}`);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }
+  } finally { vi.useRealTimers(); }
+});
