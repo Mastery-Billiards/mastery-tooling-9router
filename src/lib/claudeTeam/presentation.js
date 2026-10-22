@@ -3,11 +3,18 @@ export function memberStatus(member, waiting = false) {
   if (member.identityVerified === false) return { key: "auth", label: "Reconnect OAuth", tone: "danger" };
   if (member.error) return { key: "error", label: "Quota check failed", tone: "warning" };
   if (!waiting) return { key: "seated", label: "Seat assigned", tone: "neutral" };
+  if (member.allPlans && member.ready) return { key: "ready", label: "See eligibility by plan", tone: "neutral" };
   if (member.ready) return { key: "ready", label: member.quotaConfidence === "unknown" ? "Verify after assignment" : member.snapshot ? "Ready to try" : "Ready to verify", tone: "success" };
   return { key: "waiting", label: "Waiting for reset", tone: "warning" };
 }
 
 export function quotaDisplay(member, key, waiting = false) {
+  if (waiting && member.allPlans) {
+    const q = member.snapshot?.[key];
+    if (!member.snapshot) return { remaining: null, resetAt: null, source: "unknown", label: "Not measured" };
+    if (!q) return { remaining: null, resetAt: null, source: "absent", label: "Not reported" };
+    return { ...q, source: "historical" };
+  }
   if (waiting && member.targetTier && !member.quotaSnapshot) return { remaining: null, resetAt: null, source: "unknown", label: `Not measured for ${member.targetTier === "team_tier_1" ? "Premium" : "Standard"}` };
   if (!member.snapshot) return { remaining: null, resetAt: null, source: "unknown", label: "Not measured" };
   const quota = (waiting ? member.quota : member.snapshot)?.[key];
@@ -38,6 +45,7 @@ export function seatSummary(data, tier) {
 }
 
 export function recommendationReasons(member, config) {
+  if (member.allPlans) return member.plans.map((plan) => `${plan.targetTier === "team_tier_1" ? "Premium" : "Standard"}: ${plan.identityVerified === false ? "Reconnect OAuth before allocation." : !plan.ready ? "Saved quota is low; waiting for reset." : plan.quotaConfidence === "unknown" ? "Quota unknown for this plan; verify after assignment." : `Estimated score ${plan.score.toFixed(1)}; actual quota is verified after assignment.`}`);
   if (member.identityVerified === false) return ["OAuth identity is unverified; excluded from allocation."];
   if (!member.ready) return [`A saved quota window for ${member.targetTier === "team_tier_1" ? "Premium" : member.targetTier ? "Standard" : "this seat"} is at or below the rotation threshold; waiting for reset.`];
   const reasons = [!member.hasReceivedSeat ? "New member: takes priority on the next allocation." : "Previously used account: ranked by weighted remaining quota."];
@@ -67,3 +75,16 @@ export function automationStatus(data) {
 }
 
 export const activityLabel = (type) => ({ "operation-failed": "Operation failed", "seat-transferred": "Seat transfer completed", "candidate-exhausted": "Replacement rejected", "seat-rollback": "Seat restored / assignment undone", "limit-reset": "Limits reset", "reset-unconfirmed": "Reset not confirmed", "reset-reconciled": "Reset reconciled", "oauth-reconnected": "OAuth reconnected" }[type] || type);
+
+// Overview only: never combine percentages or scores from different seat tiers.
+export function allPlanMembers(candidatesByTier = {}) {
+  const members = new Map();
+  for (const tier of ["team_standard", "team_tier_1"]) for (const candidate of candidatesByTier[tier] || []) {
+    const row = members.get(candidate.id) || { ...candidate, allPlans: true, targetTier: null, score: null, plans: [] };
+    row.plans.push(candidate);
+    members.set(candidate.id, row);
+  }
+  return [...members.values()].map((row) => ({ ...row, ready: row.plans.some((plan) => plan.ready) }))
+    .sort((a, b) => Number(b.ready) - Number(a.ready) || String(a.email).localeCompare(String(b.email), "en", { numeric: true }))
+    .map((row, index) => ({ ...row, rank: index + 1 }));
+}

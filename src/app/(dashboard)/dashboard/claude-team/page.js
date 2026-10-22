@@ -5,7 +5,7 @@ import Link from "next/link";
 import Button from "@/shared/components/Button";
 import Modal from "@/shared/components/Modal";
 import { needsInitialInspection } from "@/lib/claudeTeam/policy";
-import { memberStatus, quotaDisplay, remainingResets, selectMembers, seatSummary, recommendationReasons, automationStatus, activityLabel } from "@/lib/claudeTeam/presentation";
+import { memberStatus, quotaDisplay, remainingResets, selectMembers, seatSummary, recommendationReasons, automationStatus, activityLabel, allPlanMembers } from "@/lib/claudeTeam/presentation";
 
 const field = "rounded-lg border border-border-subtle bg-bg px-3 py-2 text-sm w-full min-w-0";
 const panel = "rounded-xl border border-border-subtle bg-surface p-4 sm:p-5";
@@ -16,7 +16,7 @@ const date = (value, full = false) => {
   if (!value || !Number.isFinite(Date.parse(value))) return "—";
   return new Date(value).toLocaleString(undefined, full ? {} : { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 };
-const tier = (value) => value === "team_tier_1" ? "Premium" : "Standard";
+const tier = (value) => value === "all" ? "All plans" : value === "team_tier_1" ? "Premium" : "Standard";
 
 function WhyCandidate({ member, config }) {
   return <details className="text-xs text-text-muted mt-2"><summary className="cursor-pointer text-brand-500">Why this priority?</summary><ul className="list-disc pl-4 mt-2 space-y-1 max-w-lg">{recommendationReasons(member, config).map((reason) => <li key={reason}>{reason}</li>)}</ul></details>;
@@ -40,7 +40,7 @@ function Quota({ member, name, waiting }) {
     : q.remaining >= 30
       ? { text: "text-yellow-600 dark:text-yellow-400", bar: "bg-yellow-500", track: "bg-yellow-500/10" }
       : { text: "text-red-600 dark:text-red-400", bar: "bg-red-500", track: "bg-red-500/10" };
-  return <div className="min-w-0 space-y-1.5" title={`${q.source === "estimated" ? "Estimate from the last measurement" : "Measured quota"}. Reset: ${date(q.resetAt, true)}`}>
+  return <div className="min-w-0 space-y-1.5" title={`${q.source === "historical" ? "Last recorded measurement; see its plan and timestamp on the account" : q.source === "estimated" ? "Estimate from the last measurement" : "Measured quota"}. Reset: ${date(q.resetAt, true)}`}>
     <div className={`text-sm font-medium tabular-nums ${colors.text}`}>{q.source === "estimated" ? "~" : ""}{Math.round(q.remaining * 10) / 10}%<span className="ml-1 text-xs font-normal text-text-muted">left</span></div>
     <div className={`h-1.5 rounded ${colors.track}`} role="meter" aria-label={`${name === "session" ? "5h" : name} quota remaining for ${member.email}`} aria-valuenow={q.remaining} aria-valuemin={0} aria-valuemax={100}><div className={`h-full rounded ${colors.bar}`} style={{ width: `${Math.min(q.remaining, 100)}%` }} /></div>
     <div className="text-[11px] text-text-muted">Reset {date(q.resetAt)}</div>
@@ -54,11 +54,12 @@ function MemberIdentity({ member, waiting, config }) {
     <div className="flex flex-wrap items-center gap-2"><Badge status={status} />{!waiting && <span className="text-xs text-text-muted">{tier(member.seatTier)}</span>}{waiting && !member.hasReceivedSeat && member.identityVerified !== false && <span className="text-xs text-brand-500">New member</span>}</div>
     {waiting && config && <WhyCandidate member={member} config={config} />}
     {member.error && <div className="max-w-80 text-xs text-red-500">{member.identityVerified === false ? "OAuth could not be verified. Reconnect this account before rotation." : member.error}</div>}
-    {member.identityVerified === false ? <Link href={providerUrl} className="inline-block text-xs text-brand-500 underline underline-offset-2">Open Claude accounts →</Link> : <p className="text-[11px] text-text-muted">{member.snapshot ? `${waiting ? "Last measured" : "Measured"} ${date(member.snapshot.measuredAt)}${waiting && member.snapshot.tier ? ` · ${tier(member.snapshot.tier)}` : ""}` : "Quota is checked after receiving a seat"}</p>}
+    {member.identityVerified === false ? <Link href={providerUrl} className="inline-block text-xs text-brand-500 underline underline-offset-2">Open Claude accounts →</Link> : <p className="text-[11px] text-text-muted">{member.snapshot ? `${waiting ? "Last measured" : "Measured"} ${date(member.snapshot.measuredAt)}${waiting && member.snapshot.tier ? ` · ${tier(member.snapshot.tier)}` : member.allPlans ? " · Plan not recorded" : ""}` : "Quota is checked after receiving a seat"}</p>}
   </div>;
 }
 
 function Priority({ member }) {
+  if (member.allPlans) return <div className="space-y-2 text-xs">{member.plans.map((plan) => <div key={plan.targetTier}><b>{tier(plan.targetTier)}</b><p className="text-text-muted">{plan.identityVerified === false ? "Needs OAuth" : !plan.ready ? "Waiting for reset" : plan.quotaConfidence === "unknown" ? "Needs verification" : `Priority #${plan.rank} · Score ${plan.score.toFixed(1)}`}</p></div>)}</div>;
   return member.ready ? <div className="whitespace-nowrap"><b className="text-lg">#{member.rank}</b><div className="text-xs text-text-muted" title="Weighted estimate used to select the next account; not a measured quota percentage.">{Number.isFinite(member.score) ? `Score ${member.score.toFixed(1)}` : "Quota unknown"}</div></div> : <span className="text-text-muted" title="Not eligible for the next seat allocation">—</span>;
 }
 
@@ -66,8 +67,8 @@ function MemberList({ members, waiting = false, onCheck, busy, loaded, filtered,
   if (!members.length) return <p className="py-5 text-sm text-text-muted">{filtered ? "No accounts match these filters." : loaded ? waiting ? "No managed accounts are waiting for a seat." : "No managed accounts currently have a seat." : "Members appear here after admin setup and the first refresh."}</p>;
   return <>
     <div className="hidden overflow-x-auto xl:block"><table className="w-full text-left text-sm">
-      <caption className="sr-only">{waiting ? "Accounts waiting for a seat, ordered by allocation priority" : "Managed accounts with assigned seats"}. All percentages show quota remaining.</caption>
-      <thead className="text-text-muted"><tr>{[...(waiting ? ["Next"] : []), "Account", "5h left", "Weekly left", "Fable left", "Resets left", ...(!waiting ? ["Action"] : [])].map((text) => <th key={text} scope="col" className="px-3 py-3 font-medium whitespace-nowrap">{text}</th>)}</tr></thead>
+      <caption className="sr-only">{waiting && members[0]?.allPlans ? "Waiting accounts with separate eligibility by plan. Quota values are last recorded measurements." : `${waiting ? "Accounts waiting for a seat, ordered by allocation priority" : "Managed accounts with assigned seats"}. All percentages show quota remaining.`}</caption>
+      <thead className="text-text-muted"><tr>{[...(waiting ? [members[0]?.allPlans ? "Eligibility by plan" : "Next"] : []), "Account", ...(members[0]?.allPlans ? ["5h recorded", "Weekly recorded", "Fable recorded", "Recorded resets"] : ["5h left", "Weekly left", "Fable left", "Resets left"]), ...(!waiting ? ["Action"] : [])].map((text) => <th key={text} scope="col" className="px-3 py-3 font-medium whitespace-nowrap">{text}</th>)}</tr></thead>
       <tbody>{members.map((m) => <tr key={m.id} className="border-t border-border-subtle align-top hover:bg-surface-2/50 transition-colors">
         {waiting && <td className="px-3 py-4"><Priority member={m} /></td>}
         <td className="px-3 py-4"><MemberIdentity member={m} waiting={waiting} config={config} /></td>
@@ -78,7 +79,7 @@ function MemberList({ members, waiting = false, onCheck, busy, loaded, filtered,
     </table></div>
     <div className="divide-y divide-border-subtle xl:hidden">{members.map((m) => <article key={m.id} className="py-4 space-y-4">
       <div className="flex gap-3 items-start">{waiting && <Priority member={m} />}<MemberIdentity member={m} waiting={waiting} config={config} /></div>
-      <div className="grid grid-cols-3 gap-3">{[["session", "5h"], ["weekly", "Weekly"], ["fable", "Fable"]].map(([name, text]) => <div key={name} className="min-w-0"><div className="mb-2 text-xs text-text-muted">{text} left</div><Quota member={m} name={name} waiting={waiting} /></div>)}</div>
+      <div className="grid grid-cols-3 gap-3">{[["session", "5h"], ["weekly", "Weekly"], ["fable", "Fable"]].map(([name, text]) => <div key={name} className="min-w-0"><div className="mb-2 text-xs text-text-muted">{text} {m.allPlans ? "recorded" : "left"}</div><Quota member={m} name={name} waiting={waiting} /></div>)}</div>
       <div className="flex items-center justify-between gap-2 text-xs text-text-muted"><span>Resets left: {remainingResets(waiting && m.targetTier ? m.quotaSnapshot : m.snapshot) ?? "Not measured"}</span>{!waiting && <Button variant="secondary" size="sm" disabled={busy} onClick={() => onCheck(m.id)} aria-label={`Refresh quota for ${m.email}`}>Refresh quota</Button>}</div>
     </article>)}</div>
   </>;
@@ -142,7 +143,7 @@ export default function ClaudeTeamPage() {
   const busy = Boolean(operation) || data.running;
   const dirty = Boolean(sessionKey.trim()) || JSON.stringify(config) !== JSON.stringify(data.config);
   const patch = (key, value) => setConfig((c) => ({ ...c, [key]: value }));
-  const allocationCandidates = data.candidatesByTier?.[allocationTier] || data.waiting;
+  const allocationCandidates = allocationTier === "all" ? allPlanMembers(data.candidatesByTier) : data.candidatesByTier?.[allocationTier] || data.waiting;
   const all = [...data.seated, ...allocationCandidates];
   const workerStatus = automationStatus({ ...data, running: busy });
   const authIssues = all.filter((m) => m.identityVerified === false).length;
@@ -172,7 +173,7 @@ export default function ClaudeTeamPage() {
     {!!data.history.length && <section className={panel} aria-label="Latest activity"><h2 className="text-sm font-semibold mb-2">Latest activity</h2><Activity event={data.history[0]} /></section>}
     <div className="grid sm:grid-cols-3 gap-3">
       {["team_standard", "team_tier_1"].map((key) => { const s = seatSummary(data, key); return <section className={panel} key={key}><h2 className="text-sm font-medium text-text-muted">{tier(key)} · entire organization</h2><p className="mt-2 text-2xl font-semibold tabular-nums">{s.known ? `${s.used} / ${s.purchased}` : "Not loaded"}<span className="text-xs font-normal text-text-muted ml-2">{s.known ? "seats used" : ""}</span></p>{s.known && <p className="mt-2 text-xs text-text-muted"><span className={s.free ? "text-emerald-500 font-medium" : ""}>{s.free} free prepaid</span>{s.reserved ? ` · ${s.reserved} reserved` : ""}{s.external ? ` · ${s.external} used outside 9router` : ""}</p>}</section>; })}
-      <section className={panel}><h2 className="text-sm font-medium text-text-muted">Managed accounts</h2><p className="mt-2 text-2xl font-semibold">{data.lastCheckedAt ? all.length : "Not loaded"}</p><p className="mt-2 text-xs text-text-muted">{data.counts ? `${data.counts.total} members in org · ${readyCount} ready for ${tier(allocationTier)} verification${authIssues ? ` · ${authIssues} need OAuth` : ""}` : "Finish admin setup to load members"}</p></section>
+      <section className={panel}><h2 className="text-sm font-medium text-text-muted">Managed accounts</h2><p className="mt-2 text-2xl font-semibold">{data.lastCheckedAt ? all.length : "Not loaded"}</p><p className="mt-2 text-xs text-text-muted">{data.counts ? `${data.counts.total} members in org · ${readyCount} ready for verification (${tier(allocationTier)})${authIssues ? ` · ${authIssues} need OAuth` : ""}` : "Finish admin setup to load members"}</p></section>
     </div>
     {authIssues > 0 && <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-4 text-sm flex flex-wrap justify-between items-center gap-2"><p><b>{authIssues} accounts need OAuth verification.</b> They remain visible but cannot receive a seat.</p><a href={data.seated.some((m) => m.identityVerified === false) ? "#seated-members" : "#waiting-members"} className="font-medium text-brand-500 underline" onClick={() => { setFilter("auth"); setSearch(""); }}>Review accounts →</a></div>}
     {data.pending && <div className="rounded-lg bg-amber-500/10 p-4 text-sm space-y-2"><p>An incomplete {data.pending.type} operation is saved. Recover it before starting another rotation. Automatic runs also reconcile it before new work.</p><Button variant="secondary" disabled={busy} onClick={() => action({ action: "recover" })}>Recover pending operation</Button></div>}
@@ -219,8 +220,8 @@ export default function ClaudeTeamPage() {
       </>}
     </section>
     <section id="waiting-members" className={`${panel} scroll-mt-4`} aria-labelledby="waiting-title">
-      <div className="flex flex-wrap justify-between items-center gap-3"><div><h2 id="waiting-title" className="text-lg font-semibold">Waiting for a seat <span className="text-sm font-normal text-text-muted">{waiting.length}{search || filter !== "all" ? ` of ${data.waiting.length}` : ""}</span></h2><p className="text-xs text-text-muted mt-1">{readyCount} ready for {tier(allocationTier)} verification · Quota is checked after receiving a seat.</p></div><div className="flex flex-wrap gap-2"><select aria-label="Seat tier for waiting accounts" className={field.replace("w-full", "w-auto")} value={allocationTier} onChange={(e) => setAllocationTier(e.target.value)}><option value="team_standard">Standard seat</option><option value="team_tier_1">Premium seat</option></select><select aria-label="Filter waiting accounts" className={field.replace("w-full", "w-auto")} value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">All statuses</option><option value="ready">Ready to verify</option><option value="auth">Needs OAuth</option><option value="waiting">Waiting for reset</option></select><select aria-label="Sort waiting accounts" className={field.replace("w-full", "w-auto")} value={sort} onChange={(e) => setSort(e.target.value)}><option value="priority">Next seat priority</option><option value="email">Email A–Z</option></select></div></div>
-      <p className="text-xs text-text-muted my-3">Candidates and quota below apply to the selected tier. ~ = estimate from that tier. Another tier’s measurement or a stale balance is not presented as current quota.</p>
+      <div className="flex flex-wrap justify-between items-center gap-3"><div><h2 id="waiting-title" className="text-lg font-semibold">Waiting for a seat <span className="text-sm font-normal text-text-muted">{waiting.length}{search || filter !== "all" ? ` of ${data.waiting.length}` : ""}</span></h2><p className="text-xs text-text-muted mt-1">{readyCount} accounts eligible for verification · {tier(allocationTier)} · Quota is checked after receiving a seat.</p></div><div className="flex flex-wrap gap-2"><select aria-label="Seat tier for waiting accounts" className={field.replace("w-full", "w-auto")} value={allocationTier} onChange={(e) => setAllocationTier(e.target.value)}><option value="all">All plans</option><option value="team_standard">Standard seat</option><option value="team_tier_1">Premium seat</option></select><select aria-label="Filter waiting accounts" className={field.replace("w-full", "w-auto")} value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">All statuses</option><option value="ready">Ready to verify</option><option value="auth">Needs OAuth</option><option value="waiting">Waiting for reset</option></select><select aria-label="Sort waiting accounts" className={field.replace("w-full", "w-auto")} value={sort} onChange={(e) => setSort(e.target.value)}><option value="priority">{allocationTier === "all" ? "Eligibility, then email" : "Next seat priority"}</option><option value="email">Email A–Z</option></select></div></div>
+      <p className="text-xs text-text-muted my-3">{allocationTier === "all" ? "One account per row. Eligibility is shown separately for each plan. Quota columns show the last recorded measurement; its plan and timestamp are listed under the account. No combined priority or quota is calculated across plans." : "Candidates and quota below apply to the selected tier. ~ = estimate from that tier. Another tier’s measurement or a stale balance is not presented as current quota."}</p>
       <MemberList config={data.config} members={waiting} waiting busy={busy} loaded={Boolean(data.lastCheckedAt)} filtered={Boolean(search) || filter !== "all"} />
     </section>
     <details className={panel}><summary className="cursor-pointer text-sm font-medium">Seat & reset history ({data.history.length})</summary><div className="max-h-96 overflow-auto space-y-3 pt-4">{data.history.map((event) => <div key={event.id} className="border-b border-border-subtle pb-3"><Activity event={event} /></div>)}{!data.history.length && <p className="text-sm text-text-muted">No seat changes or limit resets have run yet.</p>}</div></details>

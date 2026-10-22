@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { memberStatus, quotaDisplay, remainingResets, selectMembers, seatSummary } from "../../src/lib/claudeTeam/presentation.js";
+import { memberStatus, quotaDisplay, remainingResets, selectMembers, seatSummary, allPlanMembers } from "../../src/lib/claudeTeam/presentation.js";
 
 describe("Claude Team display semantics", () => {
   it("never presents an unmeasured candidate's 100% estimate as measured quota", () => {
@@ -43,4 +43,26 @@ it("never displays a Standard snapshot as a Premium balance", () => {
   const m = { targetTier: "team_tier_1", quotaConfidence: "unknown", ready: true, snapshot: { tier: "team_standard", weekly: { remaining: 2 } }, quota: null, score: null };
   expect(quotaDisplay(m, "weekly", true)).toMatchObject({ remaining: null, label: "Not measured for Premium" });
   expect(memberStatus(m, true).label).toBe("Verify after assignment");
+});
+
+
+it("shows an account once in All plans without inventing a cross-plan score", () => {
+  const snapshot = { tier: "team_tier_1", weekly: { remaining: 10 }, fable: { remaining: 5 } };
+  const shared = { id: "agent2", email: "agent2@example.org", snapshot };
+  const standard = { ...shared, targetTier: "team_standard", rank: 1, ready: true, quotaConfidence: "unknown", score: null, quotaSnapshot: null };
+  const premium = { ...shared, targetTier: "team_tier_1", rank: 11, ready: false, quotaConfidence: "blocked", score: 10, quotaSnapshot: snapshot };
+  const rows = allPlanMembers({ team_standard: [standard], team_tier_1: [premium] });
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ allPlans: true, ready: true, targetTier: null, score: null });
+  expect(rows[0].plans).toEqual([standard, premium]);
+  expect(quotaDisplay(rows[0], "weekly", true)).toMatchObject({ remaining: 10, source: "historical" });
+  expect(quotaDisplay(standard, "weekly", true).remaining).toBeNull();
+  expect(memberStatus(rows[0], true).label).toBe("See eligibility by plan");
+});
+
+it("sorts All plans by eligibility then natural email without altering source ranks", () => {
+  const rows = [{ id: "a", email: "agent10@x", ready: true, rank: 1 }, { id: "b", email: "agent2@x", ready: true, rank: 2 }, { id: "c", email: "agent1@x", ready: false, rank: 3 }];
+  expect(allPlanMembers({ team_standard: rows }).map(m => m.id)).toEqual(["b", "a", "c"]);
+  expect(rows[0].rank).toBe(1);
+  expect(allPlanMembers()).toEqual([]);
 });
