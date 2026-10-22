@@ -145,13 +145,13 @@ export default function ClaudeTeamPage() {
   return <div className="p-4 sm:p-6 space-y-5 max-w-screen-2xl mx-auto min-w-0">
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div><h1 className="text-2xl font-semibold">Claude Team</h1><p className="text-sm text-text-muted mt-1">Seat allocation and quota for your 9router accounts.</p></div>
-      <div className="flex flex-wrap gap-2"><Button variant="secondary" loading={busy} onClick={() => action({ action: "check" })}>{operation === "configure" ? "Saving & refreshing…" : busy ? "Loading…" : "Refresh data"}</Button><Button disabled={busy || !data.config.enabled || dirty} title={dirty ? "Save your changes first" : !data.config.enabled ? "Enable automation in admin settings first" : "Run the configured seat rotation now"} onClick={() => action({ action: "run" })}>Run rotation</Button></div>
+      <div className="flex flex-wrap gap-2"><Button variant="secondary" loading={busy} onClick={() => action({ action: "check" })}>{operation === "configure" ? "Saving & refreshing…" : busy ? "Loading…" : "Refresh data"}</Button><Button disabled={busy || !data.config.enabled || dirty} title={dirty ? "Save your changes first" : !data.config.enabled ? "Enable automation in admin settings first" : "Run the configured seat rotation now"} onClick={() => action({ action: "run" })}>Run auto rules</Button></div>
     </header>
     {connectionError && <div role="alert" className="rounded-lg bg-amber-500/10 p-4 text-sm">{connectionError} Showing the last loaded data. <Link href="/login" className="underline">Sign in</Link></div>}
     {(error || data.error) && <div role="alert" className="rounded-lg bg-red-500/10 text-red-500 p-4 text-sm">{error || data.error}</div>}
     {notice && <div role="status" className={`rounded-lg p-3 text-sm ${data.error ? "bg-amber-500/10" : "bg-emerald-500/10"}`}>{notice}</div>}
     <div className={`${panel} flex flex-wrap items-start justify-between gap-3`}>
-      <div className="space-y-1"><Badge status={{ tone: data.config.enabled ? "success" : "neutral", label: data.config.enabled ? "Automation on" : "Automation off" }} /><p className="text-sm text-text-muted">{data.config.enabled ? `Checks every ${data.config.intervalMinutes} min · Next run ${date(data.nextRunAt)}` : "Manual refresh is available. Seats and reset credits stay unchanged until automation is enabled."}</p></div>
+      <div className="space-y-1"><Badge status={{ tone: data.config.enabled ? "success" : "neutral", label: data.config.enabled ? "Automation on" : "Automation off" }} /><p className="text-sm text-text-muted">{data.config.enabled ? `Checks every ${data.config.intervalMinutes} min · Next run ${date(data.nextRunAt)}` : "Automatic changes are paused. Refresh data or transfer a selected seat manually."}</p></div>
       <div className="text-xs text-text-muted">Last refreshed <span title={date(data.lastCheckedAt, true)}>{date(data.lastCheckedAt)}</span></div>
     </div>
     <div className="grid sm:grid-cols-3 gap-3">
