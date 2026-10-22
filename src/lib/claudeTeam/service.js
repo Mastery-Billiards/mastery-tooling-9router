@@ -4,6 +4,7 @@ import { teamStore, saveSession, loadSession, acquireTeamLock } from "./store";
 import { DEFAULT_CONFIG, normalizeConfig, rankCandidates, SEAT_TIERS } from "./policy";
 import { createTeamClient } from "./client";
 import { runTeamCycle } from "./engine";
+import { randomUUID } from "node:crypto";
 
 const scheduler = globalThis.__claudeTeamScheduler ??= { timer: null, running: false };
 const accounts = async () => (await getProviderConnections({ provider: "claude" })).filter((c) => c.authType === "oauth");
@@ -98,6 +99,10 @@ export async function checkTeam({ inspect = true, scheduled = false, onlyConnect
     if (workerStarted) {
       const state = await teamStore.get("state", { members: {}, history: [] });
       state.error = e.message;
+      state.history = [{ id: randomUUID(), at: new Date().toISOString(), type: "operation-failed", mode: state.worker?.kind,
+        phase: state.worker?.phase, from: state.members?.[state.pending?.sourceId]?.email || null,
+        to: state.members?.[state.pending?.targetId]?.email || null, account: state.pending ? null : state.worker?.account || null,
+        error: e.message, reason: state.pending ? "The saved transaction must be reconciled before new work." : "No pending seat transaction is recorded." }, ...(state.history || [])].slice(0, 1000);
       state.worker = { ...state.worker, phase: "failed", failedAt: new Date().toISOString() };
       state.nextRunAt = new Date(Date.now() + 180000).toISOString();
       await teamStore.set("state", state);

@@ -28,6 +28,7 @@ describe("saving Claude Team settings", () => {
     await configureTeam({ config: { adminConnectionId: "admin", orgId: "71f09ff4-2c3e-44da-91de-7917610a646d" } });
     await expect(checkTeam({ inspect: false })).rejects.toThrow("Enable automatic rotation first");
     await expect(checkTeam({ inspect: false, manual: { sourceId: "admin", targetId: "missing", expectedTier: "team_tier_1" } })).rejects.toThrow("verified OAuth");
+    expect(mock.values.get("state").history[0]).toMatchObject({ type: "operation-failed", mode: "manual" });
     const view = await checkTeam({ inspect: false, recoverOnly: true });
     expect(view.config.enabled).toBe(false);
     expect(view.pending).toBeNull();

@@ -61,4 +61,4 @@ export function automationStatus(data) {
   return { tone: "success", label: "Waiting for next check", detail: "Monitoring quota and reset times; healthy seat holders keep their seats." };
 }
 
-export const activityLabel = (type) => ({ "seat-transferred": "Seat transfer completed", "candidate-exhausted": "Replacement rejected", "seat-rollback": "Seat restored / assignment undone", "limit-reset": "Limits reset", "reset-unconfirmed": "Reset not confirmed", "reset-reconciled": "Reset reconciled", "oauth-reconnected": "OAuth reconnected" }[type] || type);
+export const activityLabel = (type) => ({ "operation-failed": "Operation failed", "seat-transferred": "Seat transfer completed", "candidate-exhausted": "Replacement rejected", "seat-rollback": "Seat restored / assignment undone", "limit-reset": "Limits reset", "reset-unconfirmed": "Reset not confirmed", "reset-reconciled": "Reset reconciled", "oauth-reconnected": "OAuth reconnected" }[type] || type);

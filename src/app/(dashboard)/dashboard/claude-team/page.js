@@ -24,7 +24,7 @@ function WhyCandidate({ member, config }) {
 
 function Activity({ event }) {
   const quotaText = (quota) => ["session", "weekly", "fable"].filter((key) => quota?.[key]).map((key) => `${key === "session" ? "5h" : key === "fable" ? "Fable" : "Weekly"} ${quota[key].remaining}%`).join(" · ");
-  return <div className="text-sm space-y-1 break-words"><div className="flex flex-wrap gap-2 items-center"><b>{activityLabel(event.type)}</b><span className="text-xs text-text-muted">{date(event.at)}{event.mode ? ` · ${event.mode}` : ""}{event.recovered ? " · recovered" : ""}</span></div><p>{event.account || `${event.from || "Free prepaid seat"} → ${event.to || "Free prepaid seat"}`}{event.tier ? ` · ${tier(event.tier)}` : ""}</p>{event.reason && <p className="text-xs text-text-muted">{event.reason}</p>}{quotaText(event.quotaBefore) && <p className="text-xs text-text-muted">Before (% left): {quotaText(event.quotaBefore)}</p>}{quotaText(event.quotaAfter) && <p className="text-xs text-text-muted">After (% left): {quotaText(event.quotaAfter)}</p>}{event.error && <p className="text-xs text-red-500">{event.error}</p>}</div>;
+  return <div className="text-sm space-y-1 break-words"><div className="flex flex-wrap gap-2 items-center"><b>{activityLabel(event.type)}</b><span className="text-xs text-text-muted">{date(event.at)}{event.mode ? ` · ${event.mode}` : ""}{event.recovered ? " · recovered" : ""}</span></div><p>{event.account || (event.from || event.to || event.type === "seat-transferred" || event.type === "seat-rollback" ? `${event.from || "Free prepaid seat"} → ${event.to || "Free prepaid seat"}` : "Claude Team check")}{event.tier ? ` · ${tier(event.tier)}` : ""}</p>{event.reason && <p className="text-xs text-text-muted">{event.reason}</p>}{quotaText(event.quotaBefore) && <p className="text-xs text-text-muted">Before (% left): {quotaText(event.quotaBefore)}</p>}{quotaText(event.quotaAfter) && <p className="text-xs text-text-muted">After (% left): {quotaText(event.quotaAfter)}</p>}{event.error && <p className="text-xs text-red-500">{event.error}</p>}</div>;
 }
 
 function Badge({ status }) {
@@ -142,7 +142,7 @@ export default function ClaudeTeamPage() {
   const dirty = Boolean(sessionKey.trim()) || JSON.stringify(config) !== JSON.stringify(data.config);
   const patch = (key, value) => setConfig((c) => ({ ...c, [key]: value }));
   const all = [...data.seated, ...data.waiting];
-  const workerStatus = automationStatus(data);
+  const workerStatus = automationStatus({ ...data, running: busy });
   const authIssues = all.filter((m) => m.identityVerified === false).length;
   const readyCount = data.waiting.filter((m) => m.ready).length;
   const next = data.waiting.find((m) => m.ready);
