@@ -40,6 +40,8 @@ describe("Claude Team worker", () => {
     await t.run({ manual });
     expect(t.operations.filter((o) => o[0] === "seat")).toEqual([["seat", "source", "unassigned"], ["seat", "target", "team_tier_1"]]);
     expect(t.state().history[0]).toMatchObject({ type: "seat-transferred", mode: "manual" });
+    expect(t.state().history[0]).toMatchObject({ reason: "User selected this replacement", quotaBefore: { session: { remaining: 90 } }, quotaAfter: { session: { remaining: 90 } } });
+    expect(t.store.set.mock.calls.some(([, value]) => value.worker?.phase === "verifying-replacement")).toBe(true);
     expect(t.state().members.target.hasReceivedSeat).toBe(true);
     expect(t.state().members.target.snapshot.session.remaining).toBe(90);
     expect(t.state().nextRunAt).toBeTruthy();
@@ -60,6 +62,7 @@ describe("Claude Team worker", () => {
     expect(t.remote[1].seat_tier).toBe("unassigned");
     expect(t.state().pending).toBeNull();
     expect(t.operations).not.toContainEqual(["route", "target", true]);
+    expect(t.state().history[0]).toMatchObject({ type: "seat-rollback", mode: "manual", to: "source@example.org" });
   });
   it("recovers an interrupted manual transaction with automation off without allocating other seats", async () => {
     const t = setup({ quotaLeft: 90, vacant: 1 }); t.config.enabled = false;

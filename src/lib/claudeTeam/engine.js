@@ -7,6 +7,8 @@ export async function runTeamCycle({ config, state, store, client, connections, 
   state = { members: {}, history: [], ...state };
   if (manual && state.pending) throw new Error("Recover the pending transaction before starting another rotation");
   const save = () => store.set("state", state);
+  const progress = async (phase, account = null) => { state.worker = { ...state.worker, phase, account, updatedAt: new Date().toISOString() }; await save(); };
+  const quotaSummary = (snapshot) => Object.fromEntries(["session", "weekly", "fable"].filter((key) => snapshot?.[key]).map((key) => [key, { remaining: snapshot[key].remaining, resetAt: snapshot[key].resetAt }]));
   const event = async (type, details) => {
     state.history.unshift({ id: randomUUID(), at: new Date().toISOString(), type, ...details });
     state.history = state.history.slice(0, 1000); await save();
@@ -104,14 +106,16 @@ export async function runTeamCycle({ config, state, store, client, connections, 
     if (source) await deactivate(source);
     await activate(target);
     state.members[target.id].hasReceivedSeat = true;
-    const mode = state.pending?.mode || "automatic";
+    const intent = state.pending;
+    const mode = intent?.mode || "automatic";
     state.pending = null;
-    await event("seat-transferred", { from: source?.email || null, to: target.email, tier, recovered, mode });
+    await event("seat-transferred", { from: source?.email || null, to: target.email, tier, recovered, mode, reason: intent?.reason, quotaBefore: intent?.quotaBefore, quotaAfter: quotaSummary(target.snapshot) });
   };
 
   // Inspection refreshes data only. It never consumes a grant, changes a seat,
   // toggles routing, or resolves an incomplete transaction by writing remotely.
   if (!inspect && state.pending) {
+    await progress("recovering");
     const pending = state.pending;
     const target = matched.find((m) => m.id === pending.targetId);
     const source = matched.find((m) => m.id === pending.sourceId);
@@ -132,11 +136,11 @@ export async function runTeamCycle({ config, state, store, client, connections, 
       else {
         await deactivate(target); await assign(target, "unassigned");
         if (source) { await assign(source, pending.tier); if (pending.sourceActive) await activate(source); }
-        state.pending = null; await event("seat-rollback", { account: source?.email || null, recovered: true });
+        state.pending = null; await event("seat-rollback", { from: target.email, to: source?.email || null, tier: pending.tier, recovered: true, mode: pending.mode, reason: "Replacement quota was too low during recovery", quotaAfter: quotaSummary(quota) });
       }
     } else if (targetTier === "unassigned" && (!source || ["unassigned", pending.tier].includes(sourceTier))) {
       if (source) { await assign(source, pending.tier); if (pending.sourceActive) await activate(source); }
-      state.pending = null; await event("seat-rollback", { account: source?.email || null, recovered: true });
+      state.pending = null; await event("seat-rollback", { from: target.email, to: source?.email || null, tier: pending.tier, recovered: true, mode: pending.mode, reason: "Interrupted transfer; original seat restored" });
     } else throw new Error("Seat state changed outside worker; manual reconciliation required");
   }
 
@@ -148,6 +152,7 @@ export async function runTeamCycle({ config, state, store, client, connections, 
   const measured = new Set();
   for (const member of matched.filter((m) => SEAT_TIERS.includes(m.seatTier))) {
     if (onlyConnectionId && member.id !== onlyConnectionId) continue;
+    await progress("checking-quota", member.email);
     try { await measure(member); measured.add(member.id); }
     catch (e) { state.members[member.id].error = e.message; }
   }
@@ -174,18 +179,19 @@ export async function runTeamCycle({ config, state, store, client, connections, 
   // Keep accounts known to have no seat out of the normal routing pool.
   for (const m of matched.filter((m) => m.seatTier === "unassigned")) await deactivate(m);
 
-  async function transfer(source, tier, selectedId = null) {
+  async function transfer(source, tier, selectedId = null, reason = source ? "Quota threshold reached" : "Fill a free prepaid seat") {
     const candidates = rankCandidates(matched.filter((m) => m.seatTier === "unassigned" && !attempted.has(m.id) && (!selectedId || m.id === selectedId)), config, now).filter((m) => m.ready);
     if (!candidates.length) return false; // source keeps seat when nobody can replace it
     for (const candidate of candidates.slice(0, 3)) {
       const target = matched.find((m) => m.id === candidate.id);
       attempted.add(target.id);
       state.pending = { type: "seat", orgId: config.orgId, sourceId: source?.id || null,
-        targetId: target.id, tier, mode: selectedId ? "manual" : "automatic", sourceActive: source?.connection.isActive === true, startedAt: new Date().toISOString() };
-      await save();
+        targetId: target.id, tier, reason: selectedId ? "User selected this replacement" : reason, quotaBefore: quotaSummary(source?.snapshot), mode: selectedId ? "manual" : "automatic", sourceActive: source?.connection.isActive === true, startedAt: new Date().toISOString() };
+      await progress("transferring-seat", target.email);
       if (selectedId) await deactivate(target);
       if (source) { await deactivate(source); await assign(source, "unassigned"); }
       await assign(target, tier);
+      await progress("verifying-replacement", target.email);
       // Allow for eventual consistency without issuing another mutation.
       let quota;
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -194,10 +200,11 @@ export async function runTeamCycle({ config, state, store, client, connections, 
       }
       if (ready(quota, config.threshold)) { await finishTransfer(source, target, tier); return true; }
       await deactivate(target); await assign(target, "unassigned");
-      await event("candidate-exhausted", { account: target.email, tier });
+      await event("candidate-exhausted", { account: target.email, from: source?.email || null, to: target.email, tier, mode: selectedId ? "manual" : "automatic", reason: `Actual quota did not exceed ${config.threshold}% in every required window`, quotaAfter: quotaSummary(quota) });
       // Restore source between attempts so every durable intent stands alone.
       if (source) { await assign(source, tier); if (state.pending.sourceActive) await activate(source); }
       state.pending = null; await save();
+      await event("seat-rollback", { from: target.email, to: source?.email || null, tier, mode: selectedId ? "manual" : "automatic", reason: source ? "Replacement quota too low; original seat restored" : "Replacement quota too low; prepaid seat left free" });
     }
     return false;
   }
@@ -205,6 +212,7 @@ export async function runTeamCycle({ config, state, store, client, connections, 
   for (const m of matched.filter((m) => measured.has(m.id))) {
     let action = decideAction(m.snapshot, config, now);
     if (action.type === "reset") {
+      await progress("resetting-limits", m.email);
       const before = m.snapshot;
       const requestId = randomUUID();
       state.pending = { type: "reset", orgId: config.orgId, targetId: m.id, grantId: action.grantId, requestId };
@@ -218,10 +226,10 @@ export async function runTeamCycle({ config, state, store, client, connections, 
       const confirmed = longKeys.every((key) => m.snapshot[key] && m.snapshot[key].remaining > config.threshold && m.snapshot[key].remaining >= before[key].remaining) &&
         longKeys.some((key) => m.snapshot[key].remaining > before[key].remaining);
       state.pending = null;
-      await event(confirmed ? "limit-reset" : "reset-unconfirmed", { account: m.email, grantId: action.grantId, requestId, error: resetError?.message || null });
+      await event(confirmed ? "limit-reset" : "reset-unconfirmed", { account: m.email, grantId: action.grantId, requestId, error: resetError?.message || null, reason: confirmed ? "Quota increase confirmed after reset" : "Quota reset could not be confirmed", quotaBefore: quotaSummary(before), quotaAfter: quotaSummary(m.snapshot) });
       action = confirmed ? decideAction(m.snapshot, config, now) : { type: "rotate", reason: "Reset not confirmed" };
     }
-    if (action.type === "rotate") await transfer(m, m.seatTier);
+    if (action.type === "rotate") await transfer(m, m.seatTier, null, action.reason);
   }
   // Fill paid empty seats only after handling exhausted holders. Members outside
   // 9router count against capacity but are never mutation targets.

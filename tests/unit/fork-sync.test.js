@@ -13,7 +13,7 @@ afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: 
 async function fixture(mode, prepare = false, local = false) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fork-sync-test-"))); dirs.push(dir);
   fs.mkdirSync(path.join(dir, "scripts")); fs.mkdirSync(path.join(dir, "bin")); fs.mkdirSync(path.join(dir, ".fork"));
-  for (const name of ["sync-upstream.mjs", "fork-runtime.cjs"]) fs.copyFileSync(path.join(repo, "scripts", name), path.join(dir, "scripts", name));
+  for (const name of ["sync-upstream.mjs", "fork-runtime.cjs", "prune-releases.mjs"]) fs.copyFileSync(path.join(repo, "scripts", name), path.join(dir, "scripts", name));
   // Fake git/npm/tar processes are scoped to this temporary fixture's PATH.
   const stub = `#!${process.execPath}
 const fs=require('fs'),path=require('path');

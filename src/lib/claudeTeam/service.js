@@ -21,6 +21,7 @@ export async function teamView() {
     seated: visible.filter((m) => SEAT_TIERS.includes(m.seatTier)),
     waiting: waiting.map((m, index) => ({ ...m, rank: index + 1 })),
     excluded: state.excluded || [], history: state.history || [], pending: state.pending || null,
+    worker: state.worker || null, lastAutoSuccessAt: state.lastAutoSuccessAt || null,
     lastCheckedAt: state.lastCheckedAt, nextRunAt: state.nextRunAt, error: state.error || null };
 }
 
@@ -84,12 +85,20 @@ export async function checkTeam({ inspect = true, scheduled = false, onlyConnect
     const admin = connections.find((c) => c.id === config.adminConnectionId);
     const proxy = admin ? await resolveConnectionProxyConfig(admin.providerSpecificData) : null;
     workerStarted = true;
+    state.worker = { phase: "checking-members", startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), kind: manual ? "manual" : inspect ? "inspection" : recoverOnly ? "recovery" : "automatic" };
+    await teamStore.set("state", state);
     await runTeamCycle({ config, state, store: teamStore, client: createTeamClient(session, proxy), connections,
       updateConnection: updateProviderConnection, inspect, onlyConnectionId, manual, recoverOnly });
+    const completed = await teamStore.get("state", {});
+    completed.worker = { ...completed.worker, phase: "idle", account: null, completedAt: new Date().toISOString() };
+    const quotaErrors = (completed.visibleIds || []).some((id) => SEAT_TIERS.includes(completed.members?.[id]?.seatTier) && completed.members[id].error);
+    if (!inspect && !manual && !recoverOnly && !completed.pending && !quotaErrors) completed.lastAutoSuccessAt = completed.worker.completedAt;
+    await teamStore.set("state", completed);
   } catch (e) {
     if (workerStarted) {
       const state = await teamStore.get("state", { members: {}, history: [] });
       state.error = e.message;
+      state.worker = { ...state.worker, phase: "failed", failedAt: new Date().toISOString() };
       state.nextRunAt = new Date(Date.now() + 180000).toISOString();
       await teamStore.set("state", state);
     }

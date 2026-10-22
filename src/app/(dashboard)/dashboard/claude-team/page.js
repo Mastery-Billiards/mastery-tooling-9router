@@ -5,7 +5,7 @@ import Link from "next/link";
 import Button from "@/shared/components/Button";
 import Modal from "@/shared/components/Modal";
 import { needsInitialInspection } from "@/lib/claudeTeam/policy";
-import { memberStatus, quotaDisplay, remainingResets, selectMembers, seatSummary } from "@/lib/claudeTeam/presentation";
+import { memberStatus, quotaDisplay, remainingResets, selectMembers, seatSummary, recommendationReasons, automationStatus, activityLabel } from "@/lib/claudeTeam/presentation";
 
 const field = "rounded-lg border border-border-subtle bg-bg-primary px-3 py-2 text-sm w-full min-w-0";
 const panel = "rounded-xl border border-border-subtle bg-bg-secondary p-4 sm:p-5";
@@ -17,6 +17,15 @@ const date = (value, full = false) => {
   return new Date(value).toLocaleString(undefined, full ? {} : { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 };
 const tier = (value) => value === "team_tier_1" ? "Premium" : "Standard";
+
+function WhyCandidate({ member, config }) {
+  return <details className="text-xs text-text-muted mt-2"><summary className="cursor-pointer text-brand-500">Why this priority?</summary><ul className="list-disc pl-4 mt-2 space-y-1 max-w-lg">{recommendationReasons(member, config).map((reason) => <li key={reason}>{reason}</li>)}</ul></details>;
+}
+
+function Activity({ event }) {
+  const quotaText = (quota) => ["session", "weekly", "fable"].filter((key) => quota?.[key]).map((key) => `${key === "session" ? "5h" : key === "fable" ? "Fable" : "Weekly"} ${quota[key].remaining}%`).join(" · ");
+  return <div className="text-sm space-y-1 break-words"><div className="flex flex-wrap gap-2 items-center"><b>{activityLabel(event.type)}</b><span className="text-xs text-text-muted">{date(event.at)}{event.mode ? ` · ${event.mode}` : ""}{event.recovered ? " · recovered" : ""}</span></div><p>{event.account || `${event.from || "Free prepaid seat"} → ${event.to || "Free prepaid seat"}`}{event.tier ? ` · ${tier(event.tier)}` : ""}</p>{event.reason && <p className="text-xs text-text-muted">{event.reason}</p>}{quotaText(event.quotaBefore) && <p className="text-xs text-text-muted">Before (% left): {quotaText(event.quotaBefore)}</p>}{quotaText(event.quotaAfter) && <p className="text-xs text-text-muted">After (% left): {quotaText(event.quotaAfter)}</p>}{event.error && <p className="text-xs text-red-500">{event.error}</p>}</div>;
+}
 
 function Badge({ status }) {
   return <span className={`inline-flex rounded-md px-2 py-1 text-xs font-medium ${toneClass[status.tone]}`}>{status.label}</span>;
@@ -38,11 +47,12 @@ function Quota({ member, name, waiting }) {
   </div>;
 }
 
-function MemberIdentity({ member, waiting }) {
+function MemberIdentity({ member, waiting, config }) {
   const status = memberStatus(member, waiting);
   return <div className="min-w-0 space-y-1.5">
     <div className="break-all font-medium">{member.email}</div>
     <div className="flex flex-wrap items-center gap-2"><Badge status={status} />{!waiting && <span className="text-xs text-text-muted">{tier(member.seatTier)}</span>}{waiting && !member.hasReceivedSeat && member.identityVerified !== false && <span className="text-xs text-brand-500">New member</span>}</div>
+    {waiting && config && <WhyCandidate member={member} config={config} />}
     {member.error && <div className="max-w-80 text-xs text-red-500">{member.identityVerified === false ? "OAuth could not be verified. Reconnect this account before rotation." : member.error}</div>}
     {member.identityVerified === false ? <Link href={providerUrl} className="inline-block text-xs text-brand-500 underline underline-offset-2">Open Claude accounts →</Link> : <p className="text-[11px] text-text-muted">{member.snapshot ? `${waiting ? "Last measured" : "Measured"} ${date(member.snapshot.measuredAt)}` : "Quota is checked after receiving a seat"}</p>}
   </div>;
@@ -52,7 +62,7 @@ function Priority({ member }) {
   return member.ready ? <div className="whitespace-nowrap"><b className="text-lg">#{member.rank}</b><div className="text-xs text-text-muted" title="Weighted estimate used to select the next account; not a measured quota percentage.">Score {member.score.toFixed(1)}</div></div> : <span className="text-text-muted" title="Not eligible for the next seat allocation">—</span>;
 }
 
-function MemberList({ members, waiting = false, onCheck, busy, loaded, filtered }) {
+function MemberList({ members, waiting = false, onCheck, busy, loaded, filtered, config }) {
   if (!members.length) return <p className="py-5 text-sm text-text-muted">{filtered ? "No accounts match these filters." : loaded ? waiting ? "No managed accounts are waiting for a seat." : "No managed accounts currently have a seat." : "Members appear here after admin setup and the first refresh."}</p>;
   return <>
     <div className="hidden overflow-x-auto xl:block"><table className="w-full text-left text-sm">
@@ -60,14 +70,14 @@ function MemberList({ members, waiting = false, onCheck, busy, loaded, filtered 
       <thead className="text-text-muted"><tr>{[...(waiting ? ["Next"] : []), "Account", "5h left", "Weekly left", "Fable left", "Resets left", ...(!waiting ? ["Action"] : [])].map((text) => <th key={text} scope="col" className="px-3 py-3 font-medium whitespace-nowrap">{text}</th>)}</tr></thead>
       <tbody>{members.map((m) => <tr key={m.id} className="border-t border-border-subtle align-top">
         {waiting && <td className="px-3 py-4"><Priority member={m} /></td>}
-        <td className="px-3 py-4"><MemberIdentity member={m} waiting={waiting} /></td>
+        <td className="px-3 py-4"><MemberIdentity member={m} waiting={waiting} config={config} /></td>
         {["session", "weekly", "fable"].map((name) => <td className="px-3 py-4 min-w-28" key={name}><Quota member={m} name={name} waiting={waiting} /></td>)}
         <td className="px-3 py-4 text-text-muted">{remainingResets(m.snapshot) ?? "Not measured"}</td>
         {!waiting && <td className="px-3 py-4"><Button variant="secondary" size="sm" disabled={busy} onClick={() => onCheck(m.id)} aria-label={`Refresh quota for ${m.email}`}>Refresh</Button></td>}
       </tr>)}</tbody>
     </table></div>
     <div className="divide-y divide-border-subtle xl:hidden">{members.map((m) => <article key={m.id} className="py-4 space-y-4">
-      <div className="flex gap-3 items-start">{waiting && <Priority member={m} />}<MemberIdentity member={m} waiting={waiting} /></div>
+      <div className="flex gap-3 items-start">{waiting && <Priority member={m} />}<MemberIdentity member={m} waiting={waiting} config={config} /></div>
       <div className="grid grid-cols-3 gap-3">{[["session", "5h"], ["weekly", "Weekly"], ["fable", "Fable"]].map(([name, text]) => <div key={name} className="min-w-0"><div className="mb-2 text-xs text-text-muted">{text} left</div><Quota member={m} name={name} waiting={waiting} /></div>)}</div>
       <div className="flex items-center justify-between gap-2 text-xs text-text-muted"><span>Resets left: {remainingResets(m.snapshot) ?? "Not measured"}</span>{!waiting && <Button variant="secondary" size="sm" disabled={busy} onClick={() => onCheck(m.id)} aria-label={`Refresh quota for ${m.email}`}>Refresh quota</Button>}</div>
     </article>)}</div>
@@ -132,6 +142,7 @@ export default function ClaudeTeamPage() {
   const dirty = Boolean(sessionKey.trim()) || JSON.stringify(config) !== JSON.stringify(data.config);
   const patch = (key, value) => setConfig((c) => ({ ...c, [key]: value }));
   const all = [...data.seated, ...data.waiting];
+  const workerStatus = automationStatus(data);
   const authIssues = all.filter((m) => m.identityVerified === false).length;
   const readyCount = data.waiting.filter((m) => m.ready).length;
   const next = data.waiting.find((m) => m.ready);
@@ -154,14 +165,16 @@ export default function ClaudeTeamPage() {
     {notice && <div role="status" className={`rounded-lg p-3 text-sm ${data.error ? "bg-amber-500/10" : "bg-emerald-500/10"}`}>{notice}</div>}
     <div className={`${panel} flex flex-wrap items-start justify-between gap-3`}>
       <div className="space-y-1"><Badge status={{ tone: data.config.enabled ? "success" : "neutral", label: data.config.enabled ? "Automation on" : "Automation off" }} /><p className="text-sm text-text-muted">{data.config.enabled ? `Checks every ${data.config.intervalMinutes} min · Next run ${date(data.nextRunAt)}` : "Automatic changes are paused. Refresh data or transfer a selected seat manually."}</p></div>
+      <div className="space-y-1 text-xs text-text-muted"><Badge status={workerStatus} /><p>{workerStatus.detail}</p><p>Last successful automatic check {date(data.lastAutoSuccessAt)}</p>{data.error && !data.pending && <Button variant="secondary" size="sm" disabled={busy} onClick={() => action({ action: data.config.enabled ? "run" : "check" })}>Retry check</Button>}</div>
       <div className="text-xs text-text-muted">Last refreshed <span title={date(data.lastCheckedAt, true)}>{date(data.lastCheckedAt)}</span></div>
     </div>
+    {!!data.history.length && <section className={panel} aria-label="Latest activity"><h2 className="text-sm font-semibold mb-2">Latest activity</h2><Activity event={data.history[0]} /></section>}
     <div className="grid sm:grid-cols-3 gap-3">
       {["team_standard", "team_tier_1"].map((key) => { const s = seatSummary(data, key); return <section className={panel} key={key}><h2 className="text-sm font-medium text-text-muted">{tier(key)} · entire organization</h2><p className="mt-2 text-2xl font-semibold tabular-nums">{s.known ? `${s.used} / ${s.purchased}` : "Not loaded"}<span className="text-xs font-normal text-text-muted ml-2">{s.known ? "seats used" : ""}</span></p>{s.known && <p className="mt-2 text-xs text-text-muted"><span className={s.free ? "text-emerald-500 font-medium" : ""}>{s.free} free prepaid</span>{s.reserved ? ` · ${s.reserved} reserved` : ""}{s.external ? ` · ${s.external} used outside 9router` : ""}</p>}</section>; })}
       <section className={panel}><h2 className="text-sm font-medium text-text-muted">Managed accounts</h2><p className="mt-2 text-2xl font-semibold">{data.lastCheckedAt ? all.length : "Not loaded"}</p><p className="mt-2 text-xs text-text-muted">{data.counts ? `${data.counts.total} members in org · ${readyCount} ready to verify${authIssues ? ` · ${authIssues} need OAuth` : ""}` : "Finish admin setup to load members"}</p></section>
     </div>
     {authIssues > 0 && <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-4 text-sm flex flex-wrap justify-between items-center gap-2"><p><b>{authIssues} accounts need OAuth verification.</b> They remain visible but cannot receive a seat.</p><a href={data.seated.some((m) => m.identityVerified === false) ? "#seated-members" : "#waiting-members"} className="font-medium text-brand-500 underline" onClick={() => { setFilter("auth"); setSearch(""); }}>Review accounts →</a></div>}
-    {next && <div className="rounded-lg border border-border-subtle px-4 py-3 text-sm"><span className="text-text-muted">Next candidate</span><b className="ml-2 break-all">{next.email}</b><span className="block mt-1 text-xs text-text-muted">{next.snapshot ? "Chosen using estimated quota. Actual quota is verified after assignment." : "No saved quota yet. This account is a candidate for verification, not confirmed to have full quota."}{!data.config.enabled ? " Automation is off; no allocation is scheduled." : ""}</span></div>}
+    {next && <div className="rounded-lg border border-border-subtle px-4 py-3 text-sm"><span className="text-text-muted">Next candidate</span><b className="ml-2 break-all">{next.email}</b><span className="block mt-1 text-xs text-text-muted">{next.snapshot ? "Chosen using estimated quota. Actual quota is verified after assignment." : "No saved quota yet. This account is a candidate for verification, not confirmed to have full quota."}{!data.config.enabled ? " Automation is off; no allocation is scheduled." : ""}</span><WhyCandidate member={next} config={data.config} /></div>}
     {data.pending && <div className="rounded-lg bg-amber-500/10 p-4 text-sm space-y-2"><p>An incomplete {data.pending.type} operation is saved. Recover it before starting another rotation. Automatic runs also reconcile it before new work.</p><Button variant="secondary" disabled={busy} onClick={() => action({ action: "recover" })}>Recover pending operation</Button></div>}
 
     {!complete && <p className="text-sm text-text-muted">Open Settings to configure the admin, web session and organization.</p>}
@@ -187,7 +200,7 @@ export default function ClaudeTeamPage() {
 
     {!data.lastCheckedAt && complete && <div role="status" className="rounded-lg bg-amber-500/10 p-4 text-sm">{busy ? "Verifying admin and loading members…" : "Members have not loaded yet."}<Button variant="secondary" className="ml-3" disabled={busy} onClick={() => action({ action: "check" })}>Load members</Button></div>}
     <div className="flex flex-wrap items-center gap-3"><label className="flex-1 min-w-48 max-w-sm"><span className="sr-only">Search member email</span><input type="search" className={field} placeholder="Search member email…" value={search} onChange={(e) => setSearch(e.target.value)} /></label>{search && <Button variant="ghost" onClick={() => setSearch("")}>Clear search</Button>}<p className="text-xs text-text-muted">All percentages mean quota remaining.</p></div>
-    <section id="seated-members" className={`${panel} scroll-mt-4`} aria-labelledby="seated-title"><h2 id="seated-title" className="text-lg font-semibold">With seats <span className="text-sm font-normal text-text-muted">{seated.length}{search ? ` of ${data.seated.length}` : ""}</span></h2><MemberList members={seated} busy={busy} loaded={Boolean(data.lastCheckedAt)} filtered={Boolean(search)} onCheck={(id) => action({ action: "check", connectionId: id })} /></section>
+    <section id="seated-members" className={`${panel} scroll-mt-4`} aria-labelledby="seated-title"><h2 id="seated-title" className="text-lg font-semibold">With seats <span className="text-sm font-normal text-text-muted">{seated.length}{search ? ` of ${data.seated.length}` : ""}</span></h2><MemberList config={data.config} members={seated} busy={busy} loaded={Boolean(data.lastCheckedAt)} filtered={Boolean(search)} onCheck={(id) => action({ action: "check", connectionId: id })} /></section>
     <section className={`${panel} space-y-4`} aria-labelledby="manual-title">
       <div><h2 id="manual-title" className="text-lg font-semibold">Manual rotation</h2><p className="mt-1 text-sm text-text-muted">Choose a seat holder and its replacement. Works with automation on or off, using the saved selection rules.</p></div>
       <label className={`${labelClass} max-w-lg`}>Account to rotate out<select className={field} value={manualSource?.id || ""} disabled={busy || Boolean(data.pending)} onChange={(e) => { const m = data.seated.find((row) => row.id === e.target.value); setManualSource(m ? { id: m.id, tier: m.seatTier } : null); setManualTargetId(""); }}><option value="">Select a seat holder</option>{data.seated.map((m) => <option key={m.id} value={m.id} disabled={m.identityVerified === false}>{m.email} · {tier(m.seatTier)}{m.identityVerified === false ? " · Reconnect OAuth" : ""}</option>)}</select></label>
@@ -195,7 +208,7 @@ export default function ClaudeTeamPage() {
       {source && <>
         <p className="text-sm">Transfer its <b>{tier(source.seatTier)}</b> seat to one account below. No limit reset will be used and no other seats will be allocated.</p>
         <fieldset disabled={busy || Boolean(data.pending)} className="space-y-2"><legend className="mb-2 font-medium text-sm">Suggested replacements · {suggestions.length} eligible</legend><p className="text-xs text-text-muted pb-2">Ordered by new-member priority, then weighted Fable / weekly / 5h quota and reset time. Unknown quota is verified after assignment; suggestions can change after refreshing.</p>
-          {suggestions.map((m, index) => <label key={m.id} className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer ${manualTargetId === m.id ? "border-brand-500 bg-brand-500/5" : "border-border-subtle"}`}><input className="mt-1" type="radio" name="manual-replacement" value={m.id} checked={manualTargetId === m.id} onChange={() => setManualTargetId(m.id)} /><span className="min-w-0 flex-1"><span className="flex flex-wrap gap-x-2 gap-y-1 text-sm"><b className="break-all">{m.email}</b>{index === 0 && <span className="text-brand-500">Recommended</span>}{!m.hasReceivedSeat && <span className="text-text-muted">New member</span>}</span><span className="block text-xs text-text-muted mt-1">Priority #{index + 1} · Score {m.score.toFixed(1)} · {m.snapshot ? "Estimated quota" : "Quota not measured yet"}</span><span className="grid grid-cols-3 gap-3 mt-3">{[["session", "5h"], ["weekly", "Weekly"], ["fable", "Fable"]].map(([name, text]) => <span key={name} className="min-w-0"><span className="block mb-1 text-xs text-text-muted">{text} left</span><Quota member={m} name={name} waiting /></span>)}</span></span></label>)}
+          {suggestions.map((m, index) => <label key={m.id} className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer ${manualTargetId === m.id ? "border-brand-500 bg-brand-500/5" : "border-border-subtle"}`}><input className="mt-1" type="radio" name="manual-replacement" value={m.id} checked={manualTargetId === m.id} onChange={() => setManualTargetId(m.id)} /><span className="min-w-0 flex-1"><span className="flex flex-wrap gap-x-2 gap-y-1 text-sm"><b className="break-all">{m.email}</b>{index === 0 && <span className="text-brand-500">Recommended</span>}{!m.hasReceivedSeat && <span className="text-text-muted">New member</span>}</span><span className="block text-xs text-text-muted mt-1">Priority #{index + 1} · Score {m.score.toFixed(1)} · {m.snapshot ? "Estimated quota" : "Quota not measured yet"}</span><span className="block mt-1 text-xs text-text-muted">{recommendationReasons(m, data.config)[0]}</span><span className="grid grid-cols-3 gap-3 mt-3">{[["session", "5h"], ["weekly", "Weekly"], ["fable", "Fable"]].map(([name, text]) => <span key={name} className="min-w-0"><span className="block mb-1 text-xs text-text-muted">{text} left</span><Quota member={m} name={name} waiting /></span>)}</span></span></label>)}
           {!suggestions.length && <p className="text-sm text-text-muted">No eligible replacement. Refresh data or reconnect accounts needing OAuth. The current holder keeps its seat.</p>}
         </fieldset>
         {manualTargetId && !target && <p role="alert" className="text-sm text-amber-500">The selected replacement is no longer eligible. Choose another account.</p>}
@@ -208,8 +221,8 @@ export default function ClaudeTeamPage() {
     <section id="waiting-members" className={`${panel} scroll-mt-4`} aria-labelledby="waiting-title">
       <div className="flex flex-wrap justify-between items-center gap-3"><div><h2 id="waiting-title" className="text-lg font-semibold">Waiting for a seat <span className="text-sm font-normal text-text-muted">{waiting.length}{search || filter !== "all" ? ` of ${data.waiting.length}` : ""}</span></h2><p className="text-xs text-text-muted mt-1">{readyCount} ready to verify · Quota is checked after receiving a seat.</p></div><div className="flex flex-wrap gap-2"><select aria-label="Filter waiting accounts" className={field.replace("w-full", "w-auto")} value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">All statuses</option><option value="ready">Ready to verify</option><option value="auth">Needs OAuth</option><option value="waiting">Waiting for reset</option></select><select aria-label="Sort waiting accounts" className={field.replace("w-full", "w-auto")} value={sort} onChange={(e) => setSort(e.target.value)}><option value="priority">Next seat priority</option><option value="email">Email A–Z</option></select></div></div>
       <p className="text-xs text-text-muted my-3">Not measured = no saved quota. ~ = estimated from a previous measurement; it may differ after assigning a different seat type.</p>
-      <MemberList members={waiting} waiting busy={busy} loaded={Boolean(data.lastCheckedAt)} filtered={Boolean(search) || filter !== "all"} />
+      <MemberList config={data.config} members={waiting} waiting busy={busy} loaded={Boolean(data.lastCheckedAt)} filtered={Boolean(search) || filter !== "all"} />
     </section>
-    <details className={panel}><summary className="cursor-pointer text-sm font-medium">Seat & reset history ({data.history.length})</summary><div className="max-h-96 overflow-auto space-y-3 pt-4">{data.history.map((event) => <div key={event.id} className="border-b border-border-subtle pb-2 text-sm"><time className="text-text-muted">{date(event.at)}</time> · <b>{event.type}</b>{event.mode ? ` · ${event.mode}` : ""} · {event.account || [event.from || "Empty seat", event.to].filter(Boolean).join(" → ")}{event.tier ? ` · ${tier(event.tier)}` : ""}{event.error ? ` · ${event.error}` : ""}</div>)}{!data.history.length && <p className="text-sm text-text-muted">No seat changes or limit resets have run yet.</p>}</div></details>
+    <details className={panel}><summary className="cursor-pointer text-sm font-medium">Seat & reset history ({data.history.length})</summary><div className="max-h-96 overflow-auto space-y-3 pt-4">{data.history.map((event) => <div key={event.id} className="border-b border-border-subtle pb-3"><Activity event={event} /></div>)}{!data.history.length && <p className="text-sm text-text-muted">No seat changes or limit resets have run yet.</p>}</div></details>
   </div>;
 }

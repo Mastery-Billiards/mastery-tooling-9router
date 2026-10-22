@@ -5,6 +5,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import runtime from "./fork-runtime.cjs";
+import { pruneReleases } from "./prune-releases.mjs";
 const { atomicJson, readJson, delay, freePort, waitHealthy, stopChild } = runtime;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dir = path.join(root, ".fork");
@@ -117,12 +118,15 @@ try {
         status("rolled-back", { sha, message: "New release failed; previous release restored" });
         throw Object.assign(e, { reported: true });
       }
+      let cleanup;
+      try { status("cleaning", { sha }); cleanup = pruneReleases(dir, [release, previous]); }
+      catch (e) { cleanup = { warning: e.message }; writeLog(`Release cleanup skipped: ${e.message}`); }
       if (!localOnly) {
         status("pushing", { sha });
         try { await command("git", ["push", "origin", "HEAD"]); }
         catch (e) { status("push-failed", { sha, message: "New release is running; push failed. Retry git push origin HEAD." }); throw Object.assign(e, { reported: true }); }
       }
-      status("done", { sha });
+      status("done", { sha, cleanup });
     }
   }
 } catch (e) {
