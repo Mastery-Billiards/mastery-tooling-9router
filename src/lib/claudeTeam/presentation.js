@@ -76,7 +76,15 @@ export function automationStatus(data) {
 
 export const activityLabel = (type) => ({ "operation-failed": "Operation failed", "seat-transferred": "Seat transfer completed", "candidate-exhausted": "Replacement rejected", "seat-rollback": "Seat restored / assignment undone", "limit-reset": "Limits reset", "reset-unconfirmed": "Reset not confirmed", "reset-reconciled": "Reset reconciled", "oauth-reconnected": "OAuth reconnected" }[type] || type);
 
-// Overview only: never combine percentages or scores from different seat tiers.
+// Merge plan queues using their existing priority ranks, never cross-tier quota scores.
+function allocationPriority(row) {
+  const groups = row.plans.map((plan) => ({
+    group: plan.identityVerified === false ? 3 : !plan.ready ? 2 : plan.quotaConfidence === "estimated" ? 0 : 1,
+    rank: plan.rank,
+  }));
+  const group = Math.min(...groups.map((plan) => plan.group));
+  return { group, rank: Math.min(...groups.filter((plan) => plan.group === group).map((plan) => plan.rank)) };
+}
 export function allPlanMembers(candidatesByTier = {}) {
   const members = new Map();
   for (const tier of ["team_standard", "team_tier_1"]) for (const candidate of candidatesByTier[tier] || []) {
@@ -85,6 +93,9 @@ export function allPlanMembers(candidatesByTier = {}) {
     members.set(candidate.id, row);
   }
   return [...members.values()].map((row) => ({ ...row, ready: row.plans.some((plan) => plan.ready) }))
-    .sort((a, b) => Number(b.ready) - Number(a.ready) || String(a.email).localeCompare(String(b.email), "en", { numeric: true }))
+    .sort((a, b) => {
+      const left = allocationPriority(a), right = allocationPriority(b);
+      return left.group - right.group || left.rank - right.rank || String(a.id).localeCompare(String(b.id));
+    })
     .map((row, index) => ({ ...row, rank: index + 1 }));
 }

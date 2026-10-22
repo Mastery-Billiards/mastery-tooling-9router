@@ -60,9 +60,32 @@ it("shows an account once in All plans without inventing a cross-plan score", ()
   expect(memberStatus(rows[0], true).label).toBe("See eligibility by plan");
 });
 
-it("sorts All plans by eligibility then natural email without altering source ranks", () => {
+it("sorts All plans by allocation priority without altering source ranks", () => {
   const rows = [{ id: "a", email: "agent10@x", ready: true, rank: 1 }, { id: "b", email: "agent2@x", ready: true, rank: 2 }, { id: "c", email: "agent1@x", ready: false, rank: 3 }];
-  expect(allPlanMembers({ team_standard: rows }).map(m => m.id)).toEqual(["b", "a", "c"]);
+  expect(allPlanMembers({ team_standard: rows }).map(m => m.id)).toEqual(["a", "b", "c"]);
   expect(rows[0].rank).toBe(1);
   expect(allPlanMembers()).toEqual([]);
+});
+
+
+it("prefers usable tier quota over unknown probes and uses the best eligible plan rank", () => {
+  const standard = [
+    { id: "known-standard", rank: 1, ready: true, quotaConfidence: "estimated" },
+    { id: "probe", rank: 2, ready: true, quotaConfidence: "unknown" },
+    { id: "known-premium", rank: 3, ready: true, quotaConfidence: "unknown" },
+    { id: "blocked", rank: 4, ready: false, quotaConfidence: "blocked" },
+    { id: "auth", rank: 5, ready: false, identityVerified: false },
+  ];
+  const premium = [
+    { id: "known-premium", rank: 1, ready: true, quotaConfidence: "estimated" },
+    { id: "known-standard", rank: 2, ready: true, quotaConfidence: "unknown" },
+    { id: "probe", rank: 3, ready: false, quotaConfidence: "blocked" },
+    { id: "blocked", rank: 4, ready: false, quotaConfidence: "blocked" },
+    { id: "auth", rank: 5, ready: false, identityVerified: false },
+  ];
+  const rows = allPlanMembers({ team_standard: standard, team_tier_1: premium });
+  expect(rows.map(row => row.id)).toEqual(["known-premium", "known-standard", "probe", "blocked", "auth"]);
+  // Renaming accounts cannot change allocation priority, including equal-rank ties.
+  expect(allPlanMembers({ team_standard: standard.map(row => ({ ...row, email: `${6 - row.rank}@x` })), team_tier_1: premium }).map(row => row.id)).toEqual(rows.map(row => row.id));
+  expect(selectMembers(rows, { filter: "ready" }).map(row => row.id)).toEqual(["known-premium", "known-standard", "probe"]);
 });
