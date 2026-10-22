@@ -24,10 +24,15 @@ function Badge({ status }) {
 function Quota({ member, name, waiting }) {
   const q = quotaDisplay(member, name, waiting);
   if (q.remaining === null) return <div className="text-xs text-text-muted" title={q.source === "unknown" ? "No quota has been measured. Actual quota is checked after a seat is assigned." : "Claude did not report a separate limit for this window."}>{q.label}</div>;
-  const color = q.remaining <= 5 ? "bg-red-500" : q.remaining < 20 ? "bg-amber-500" : "bg-emerald-500";
+  // Match Quota Tracker's remaining-quota thresholds and light/dark colors.
+  const colors = q.remaining > 70
+    ? { text: "text-green-600 dark:text-green-400", bar: "bg-green-500", track: "bg-green-500/10" }
+    : q.remaining >= 30
+      ? { text: "text-yellow-600 dark:text-yellow-400", bar: "bg-yellow-500", track: "bg-yellow-500/10" }
+      : { text: "text-red-600 dark:text-red-400", bar: "bg-red-500", track: "bg-red-500/10" };
   return <div className="min-w-0 space-y-1.5" title={`${q.source === "estimated" ? "Estimate from the last measurement" : "Measured quota"}. Reset: ${date(q.resetAt, true)}`}>
-    <div className="text-sm font-medium tabular-nums">{q.source === "estimated" ? "~" : ""}{Math.round(q.remaining * 10) / 10}%<span className="ml-1 text-xs font-normal text-text-muted">left</span></div>
-    <div className="h-1.5 rounded bg-surface-3" role="meter" aria-label={`${name === "session" ? "5h" : name} quota remaining for ${member.email}`} aria-valuenow={q.remaining} aria-valuemin={0} aria-valuemax={100}><div className={`h-full rounded ${color}`} style={{ width: `${q.remaining}%` }} /></div>
+    <div className={`text-sm font-medium tabular-nums ${colors.text}`}>{q.source === "estimated" ? "~" : ""}{Math.round(q.remaining * 10) / 10}%<span className="ml-1 text-xs font-normal text-text-muted">left</span></div>
+    <div className={`h-1.5 rounded ${colors.track}`} role="meter" aria-label={`${name === "session" ? "5h" : name} quota remaining for ${member.email}`} aria-valuenow={q.remaining} aria-valuemin={0} aria-valuemax={100}><div className={`h-full rounded ${colors.bar}`} style={{ width: `${Math.min(q.remaining, 100)}%` }} /></div>
     <div className="text-[11px] text-text-muted">Reset {date(q.resetAt)}</div>
   </div>;
 }
