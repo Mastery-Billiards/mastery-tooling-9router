@@ -35,7 +35,7 @@ const PASTE_TOKEN_PROVIDERS = {
  * - Localhost: Auto callback via popup message
  * - Remote: Manual paste callback URL
  */
-export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, onClose, oauthMeta, idcConfig }) {
+export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, onClose, oauthMeta, idcConfig, reconnectConnection = null }) {
   const [step, setStep] = useState("waiting"); // waiting | input | success | error
   const [authData, setAuthData] = useState(null);
   const [callbackUrl, setCallbackUrl] = useState("");
@@ -94,6 +94,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
           redirectUri: authData.redirectUri,
           codeVerifier: authData.codeVerifier,
           state,
+          ...(reconnectConnection ? { connectionId: reconnectConnection.id } : {}),
           // Zed: thread the login attempt's system_id so the stored
           // connection keeps the id sent to zed.dev (see register-session).
           ...(authData.systemId ? { systemId: authData.systemId } : {}),
@@ -110,7 +111,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       setError(err.message);
       setStep("error");
     }
-  }, [authData, provider, oauthMeta]);
+  }, [authData, provider, oauthMeta, reconnectConnection]);
 
   const completeXaiManualCode = useCallback(async (code) => {
     if (!authData?.state) return;
@@ -754,7 +755,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   const isXaiProvider = provider === "xai";
   const isKimchiProvider = provider === "kimchi";
   const deviceLoginUrl = deviceData?.verification_uri_complete || deviceData?.verification_uri || "";
-  const modalTitle = isXaiProvider ? "Connect Grok Build OAuth" : `Connect ${providerInfo.name}`;
+  const modalTitle = reconnectConnection ? `Reconnect ${providerInfo.name}` : isXaiProvider ? "Connect Grok Build OAuth" : `Connect ${providerInfo.name}`;
   const manualPlaceholder = isXaiProvider
     ? "http://127.0.0.1:56121/callback?code=... or copied code"
     : isKimchiProvider
@@ -764,6 +765,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   return (
     <Modal isOpen={isOpen} title={modalTitle} onClose={handleClose} size="lg">
       <div className="flex flex-col gap-4">
+        {reconnectConnection && <div className="rounded-lg border border-border p-3 text-sm"><b className="break-all">{reconnectConnection.email || reconnectConnection.name}</b><p className="mt-1 text-text-muted">Sign in to this same account and organization. Only its OAuth credentials are replaced; its ID, proxy, priority, history and enabled/disabled state are preserved.</p></div>}
         {/* Proxy OAuth (trae/windsurf/zed): browser flow; paste-token only when configured */}
         {PROXY_OAUTH_PROVIDERS.has(provider) && (step === "waiting" || step === "input" || step === "error") && (
           <>
@@ -998,6 +1000,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
 }
 
 OAuthModal.propTypes = {
+  reconnectConnection: PropTypes.shape({ id: PropTypes.string.isRequired, email: PropTypes.string, name: PropTypes.string }),
   isOpen: PropTypes.bool.isRequired,
   provider: PropTypes.string,
   providerInfo: PropTypes.shape({ name: PropTypes.string }),

@@ -8,6 +8,7 @@ import {
   pollForToken
 } from "@/lib/oauth/providers";
 import { createProviderConnection } from "@/models";
+import { reconnectClaude } from "@/lib/oauth/reconnectClaude";
 import { readDesktopPassToken } from "open-sse/shared/mimoAccount.js";
 import {
   startCodexProxy,
@@ -320,6 +321,7 @@ export async function POST(request, { params }) {
 
     if (action === "exchange") {
       const { code, redirectUri, codeVerifier, state, meta, systemId } = body;
+      if (body.connectionId && provider !== "claude") return NextResponse.json({ error: "Reconnect currently supports Claude OAuth only" }, { status: 400 });
 
       // Xiaomi MiMo: no token exchange needed — the callback already decrypted the sk.
       // Just read the session result and create the connection.
@@ -466,13 +468,14 @@ export async function POST(request, { params }) {
       // Exchange code for tokens (meta carries provider-specific params, e.g. gitlab clientId/baseUrl).
       // systemId (Zed) is merged into meta so the login attempt's own id is
       // used instead of a freshly prepared one. Ignored by other providers.
-      const tokenData = await exchangeTokens(provider, code, redirectUri, codeVerifier, state, {
+      const exchange = () => exchangeTokens(provider, code, redirectUri, codeVerifier, state, {
         ...(meta || {}),
         ...(systemId ? { systemId } : {}),
       });
 
       // Save to database
-      const connection = await createProviderConnection({
+      const tokenData = body.connectionId ? null : await exchange();
+      const connection = body.connectionId ? await reconnectClaude(body.connectionId, exchange) : await createProviderConnection({
         provider,
         authType: "oauth",
         ...tokenData,

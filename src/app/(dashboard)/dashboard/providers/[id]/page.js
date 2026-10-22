@@ -48,6 +48,7 @@ export default function ProviderDetailPage() {
   const [providerNode, setProviderNode] = useState(null);
   const [proxyPools, setProxyPools] = useState([]);
   const [showOAuthModal, setShowOAuthModal] = useState(false);
+  const [reconnectConnection, setReconnectConnection] = useState(null);
   const [showXiaomiMimoModal, setShowXiaomiMimoModal] = useState(false);
   const [showIFlowCookieModal, setShowIFlowCookieModal] = useState(false);
   const [showAddApiKeyModal, setShowAddApiKeyModal] = useState(false);
@@ -94,6 +95,7 @@ export default function ProviderDetailPage() {
   const AG_RISK_STORAGE_KEY = "ag_risk_confirmed";
 
   const openOAuthConnection = () => {
+    setReconnectConnection(null);
     setShowOAuthModal(true);
   };
 
@@ -835,6 +837,7 @@ export default function ProviderDetailPage() {
   const handleOAuthSuccess = () => {
     fetchConnections();
     setShowOAuthModal(false);
+    setReconnectConnection(null);
   };
 
   const handleIFlowCookieSuccess = () => {
@@ -1043,6 +1046,7 @@ export default function ProviderDetailPage() {
                 connection={conn}
                 proxyPools={proxyPools}
                 isOAuth={isOAuth}
+                onReconnect={providerId === "claude" && conn.authType === "oauth" ? () => { setReconnectConnection(conn); setShowOAuthModal(true); } : undefined}
                 isFirst={index === 0}
                 isLast={index === connections.length - 1}
                 onMoveUp={() => handleSwapPriority(index, index - 1)}
@@ -1866,11 +1870,13 @@ export default function ProviderDetailPage() {
         />
       ) : (
         <OAuthModal
+          key={reconnectConnection?.id || "add"}
+          reconnectConnection={reconnectConnection}
           isOpen={showOAuthModal}
           provider={providerId}
           providerInfo={providerInfo}
           onSuccess={handleOAuthSuccess}
-          onClose={() => setShowOAuthModal(false)}
+          onClose={() => { setShowOAuthModal(false); setReconnectConnection(null); }}
         />
       )}
 
