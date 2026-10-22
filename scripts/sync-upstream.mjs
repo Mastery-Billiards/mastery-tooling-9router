@@ -71,9 +71,13 @@ try {
       if (!remotes.includes("upstream")) await command("git", ["remote", "add", "upstream", "https://github.com/decolua/9router.git"]);
       const remote = await command("git", ["remote", "get-url", "upstream"], root, true);
       if (!["https://github.com/decolua/9router.git", "git@github.com:decolua/9router.git", "https://github.com/decolua/9router"].includes(remote)) throw new Error("Unexpected upstream remote; inspect Git configuration");
+      await command("git", ["fetch", "origin"]);
       await command("git", ["fetch", "upstream"]);
       status("merging");
-      try { await command("git", ["merge", "--no-edit", "upstream/master"]); }
+      try {
+        await command("git", ["merge", "--no-edit", "origin/master"]);
+        await command("git", ["merge", "--no-edit", "upstream/master"]);
+      }
       catch (e) {
         const conflicts = (await command("git", ["diff", "--name-only", "--diff-filter=U"], root, true)).split("\n").filter(Boolean);
         for (const file of conflicts) writeLog(`conflict: ${file}`);

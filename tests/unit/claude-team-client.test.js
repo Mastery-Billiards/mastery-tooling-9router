@@ -29,7 +29,14 @@ describe("Claude Team API client", () => {
   });
   it("does not expose remote errors or credentials in thrown messages", async () => {
     const client = createTeamClient("private-session", null, vi.fn(async () => ({ ok: false, status: 403, json: async () => ({ secret: "private-session" }) })));
-    await expect(client.account()).rejects.toThrow("Claude API HTTP 403");
+    await expect(client.account()).rejects.toThrow("access denied (HTTP 403)");
+  });
+  it("distinguishes Cloudflare challenges from OAuth and session failures", async () => {
+    const client = createTeamClient("private-session", null, vi.fn(async () => ({ ok: false, status: 403, headers: new Headers({ "cf-mitigated": "challenge" }) })));
+    await expect(client.account()).rejects.toThrow("Cloudflare blocked");
+    await expect(client.usage({ id: "member", accessToken: "oauth" })).rejects.toThrow("Claude API HTTP 403");
+    const expired = createTeamClient("private-session", null, vi.fn(async () => ({ ok: false, status: 401 })));
+    await expect(expired.account()).rejects.toThrow("web session expired");
   });
   it("matches the captured seat PUT origin and sends only the seat tier", async () => {
     const fetch = vi.fn(async () => response({})); const client = createTeamClient("web", null, fetch);

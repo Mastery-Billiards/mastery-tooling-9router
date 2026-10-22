@@ -9,7 +9,16 @@ export function createTeamClient(sessionKey, adminProxy = null, fetcher = proxyA
     let response;
     try { response = await fetcher(url, { ...options, redirect: "error", signal: AbortSignal.timeout(25000) }, proxy); }
     catch { throw new Error("Claude request failed or timed out; reconcile before retrying writes"); }
-    if (!response.ok) throw new Error(`Claude API HTTP ${response.status}`);
+    if (!response.ok) {
+      const admin = new URL(url).hostname === "claude.ai";
+      const endpoint = admin ? new URL(url).pathname.split("/").filter(Boolean).at(-1) : "OAuth";
+      if (admin && response.status === 403 && response.headers?.get("cf-mitigated") === "challenge") {
+        throw new Error(`Claude admin ${endpoint}: Cloudflare blocked the request (HTTP 403). Open Claude in the admin browser to check access, then retry Refresh data. OAuth reconnect does not replace the admin web session.`);
+      }
+      if (admin && response.status === 401) throw new Error(`Claude admin ${endpoint}: web session expired (HTTP 401). Update the admin web session in Settings; OAuth reconnect is separate.`);
+      if (admin && response.status === 403) throw new Error(`Claude admin ${endpoint}: access denied (HTTP 403). Check the selected admin, organization and admin web session in Settings.`);
+      throw new Error(`Claude API HTTP ${response.status}`);
+    }
     try { return await response.json(); } catch { throw new Error("Claude returned invalid JSON"); }
   }
   const webHeaders = {
