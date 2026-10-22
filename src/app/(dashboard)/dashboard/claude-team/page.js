@@ -7,8 +7,8 @@ import Modal from "@/shared/components/Modal";
 import { needsInitialInspection } from "@/lib/claudeTeam/policy";
 import { memberStatus, quotaDisplay, remainingResets, selectMembers, seatSummary, recommendationReasons, automationStatus, activityLabel } from "@/lib/claudeTeam/presentation";
 
-const field = "rounded-lg border border-border-subtle bg-bg-primary px-3 py-2 text-sm w-full min-w-0";
-const panel = "rounded-xl border border-border-subtle bg-bg-secondary p-4 sm:p-5";
+const field = "rounded-lg border border-border-subtle bg-bg px-3 py-2 text-sm w-full min-w-0";
+const panel = "rounded-xl border border-border-subtle bg-surface p-4 sm:p-5";
 const labelClass = "flex min-w-0 flex-col justify-end gap-2 text-sm";
 const providerUrl = "/dashboard/providers/claude";
 const toneClass = { danger: "bg-red-500/10 text-red-500", warning: "bg-amber-500/10 text-amber-500", success: "bg-emerald-500/10 text-emerald-500", neutral: "bg-surface-2 text-text-muted" };
@@ -68,7 +68,7 @@ function MemberList({ members, waiting = false, onCheck, busy, loaded, filtered,
     <div className="hidden overflow-x-auto xl:block"><table className="w-full text-left text-sm">
       <caption className="sr-only">{waiting ? "Accounts waiting for a seat, ordered by allocation priority" : "Managed accounts with assigned seats"}. All percentages show quota remaining.</caption>
       <thead className="text-text-muted"><tr>{[...(waiting ? ["Next"] : []), "Account", "5h left", "Weekly left", "Fable left", "Resets left", ...(!waiting ? ["Action"] : [])].map((text) => <th key={text} scope="col" className="px-3 py-3 font-medium whitespace-nowrap">{text}</th>)}</tr></thead>
-      <tbody>{members.map((m) => <tr key={m.id} className="border-t border-border-subtle align-top">
+      <tbody>{members.map((m) => <tr key={m.id} className="border-t border-border-subtle align-top hover:bg-surface-2/50 transition-colors">
         {waiting && <td className="px-3 py-4"><Priority member={m} /></td>}
         <td className="px-3 py-4"><MemberIdentity member={m} waiting={waiting} config={config} /></td>
         {["session", "weekly", "fable"].map((name) => <td className="px-3 py-4 min-w-28" key={name}><Quota member={m} name={name} waiting={waiting} /></td>)}
