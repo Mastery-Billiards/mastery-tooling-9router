@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import PropTypes from "prop-types";
 import { Modal, Button, Input } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
+import { openOAuthPopup } from "@/shared/utils/oauthPopup";
 
 // Providers using the dynamic-port local callback proxy.
 // Browser OAuth: popup → auto callback → auto exchange → poll-status.
@@ -444,7 +445,13 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         throw new Error("No authorization URL returned from OAuth provider");
       }
 
-      if (provider === "codex" && codexProxyActive) {
+      if (provider === "claude") {
+        // Always request a separate popup for both Add and Reconnect, including
+        // remote dashboard URLs. A blocked popup never falls back to a tab.
+        popupRef.current = openOAuthPopup(window, data.authUrl);
+        setStep(popupRef.current ? "waiting" : "input");
+        if (!popupRef.current) setError("Popup blocked. Allow popups for 9router, then use Open authorization popup below.");
+      } else if (provider === "codex" && codexProxyActive) {
         // Proxy active: callback will be handled server-side (auto-exchange) or via channels (fallback)
         setStep("waiting");
         popupRef.current = window.open(data.authUrl, "oauth_popup", "width=600,height=700");
@@ -766,6 +773,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     <Modal isOpen={isOpen} title={modalTitle} onClose={handleClose} size="lg">
       <div className="flex flex-col gap-4">
         {reconnectConnection && <div className="rounded-lg border border-border p-3 text-sm"><b className="break-all">{reconnectConnection.email || reconnectConnection.name}</b><p className="mt-1 text-text-muted">Sign in to this same account and organization. Only its OAuth credentials are replaced; its ID, proxy, priority, history and enabled/disabled state are preserved.</p></div>}
+        {provider === "claude" && authData?.authUrl && step !== "success" && <Button variant="secondary" onClick={() => { popupRef.current = openOAuthPopup(window, authData.authUrl); setStep(popupRef.current ? "waiting" : "input"); setError(popupRef.current ? null : "Popup blocked. Allow popups for 9router and try again."); }}>Open authorization popup</Button>}
         {/* Proxy OAuth (trae/windsurf/zed): browser flow; paste-token only when configured */}
         {PROXY_OAUTH_PROVIDERS.has(provider) && (step === "waiting" || step === "input" || step === "error") && (
           <>
