@@ -10,7 +10,7 @@ const repo = fileURLToPath(new URL("../../", import.meta.url));
 const dirs = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
-async function fixture(mode, prepare = false) {
+async function fixture(mode, prepare = false, local = false) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fork-sync-test-"))); dirs.push(dir);
   fs.mkdirSync(path.join(dir, "scripts")); fs.mkdirSync(path.join(dir, "bin")); fs.mkdirSync(path.join(dir, ".fork"));
   for (const name of ["sync-upstream.mjs", "fork-runtime.cjs"]) fs.copyFileSync(path.join(repo, "scripts", name), path.join(dir, "scripts", name));
@@ -38,7 +38,7 @@ if(cmd==='npm'&&args[0]==='run'){
   if (!prepare) fs.writeFileSync(path.join(dir, ".fork", "launcher.json"), JSON.stringify({ pid: process.pid, root: dir, healthy: true, release: "/previous" }));
   let code = 0;
   try {
-    await exec(process.execPath, [path.join(dir, "scripts", "sync-upstream.mjs"), ...(prepare ? ["--prepare"] : [])], {
+    await exec(process.execPath, [path.join(dir, "scripts", "sync-upstream.mjs"), ...(prepare ? ["--prepare"] : []), ...(local ? ["--local"] : [])], {
       env: { ...process.env, PATH: path.join(dir, "bin") + path.delimiter + process.env.PATH, DATA_DIR: path.join(dir, "data"), PROBE_MODE: mode, PROBE_CALLS: path.join(dir, "calls") }, timeout: 15000,
     });
   } catch (e) { code = e.code; }
@@ -57,6 +57,12 @@ describe("detached fork updater", () => {
   it("leaves the old release selected on build failure and never pushes", async () => {
     const t = await fixture("build-failed"); expect(t.status.phase).toBe("build-failed");
     expect(fs.existsSync(path.join(t.dir, ".fork", "current"))).toBe(false); expect(t.calls).not.toContain("git push");
+  });
+  it("deploys local fixes without fetching or merging upstream", async () => {
+    const t = await fixture("build-failed", false, true);
+    expect(t.status.phase).toBe("build-failed");
+    expect(t.calls).not.toContain("git fetch"); expect(t.calls).not.toContain("git merge"); expect(t.calls).not.toContain("git push");
+    expect(t.calls).toContain("npm run build");
   });
   it("prepares a separate health-checked release without merging or restarting", async () => {
     const t = await fixture("ok", true); expect(t.code, JSON.stringify(t.status)).toBe(0); expect(t.status.phase).toBe("prepared");

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_CONFIG as C, normalizeConfig, parseQuota, estimateQuota, ready, score, rankCandidates, nextReadyAt, decideAction, spareSeats } from "../../src/lib/claudeTeam/policy.js";
+import { DEFAULT_CONFIG as C, normalizeConfig, parseQuota, estimateQuota, ready, score, rankCandidates, nextReadyAt, decideAction, spareSeats, needsInitialInspection } from "../../src/lib/claudeTeam/policy.js";
 
 const now = Date.parse("2026-10-22T06:00:00Z");
 const later = new Date(now + 3600000).toISOString();
@@ -8,6 +8,16 @@ const quota = (session = 60, weekly = 60, fable = 60, grants = []) => ({ session
 const grant = (extra = {}) => ({ id: "g", resets_left: 1, usable_now: true, clears: ["seven_day"], ends_at: later, use_requires_limit: false, ...extra });
 
 describe("Claude Team policy", () => {
+  it("loads initial member data only for complete saved settings with no running/error/pending state", () => {
+    const view = { config: { adminConnectionId: "a", orgId: "o" }, sessionConfigured: true };
+    expect(needsInitialInspection(view)).toBe(true);
+    for (const extra of [{ sessionConfigured: false }, { config: { adminConnectionId: "a" } }, { lastCheckedAt: later }, { running: true }, { error: "403" }, { pending: {} }]) expect(needsInitialInspection({ ...view, ...extra })).toBe(false);
+  });
+  it("keeps unverified or blocked members out of the next-ready order", () => {
+    const rows = rankCandidates([{ id: "expired", identityVerified: false }, { id: "blocked", snapshot: quota(0, 100, 100) }, { id: "valid", hasReceivedSeat: true, snapshot: quota(60, 60, 60) }], C, now);
+    expect(rows.map((m) => m.id)).toEqual(["valid", "blocked", "expired"]);
+    expect(rows[2].ready).toBe(false);
+  });
   it("validates configuration and never accepts arbitrary fields", () => {
     expect(normalizeConfig({ command: "bad" }).command).toBeUndefined();
     expect(() => normalizeConfig({ threshold: NaN })).toThrow();

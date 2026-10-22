@@ -57,7 +57,7 @@ export function score(quota, weights) {
 export function rankCandidates(members, config, now = Date.now()) {
   const list = members.map((m) => {
     const quota = estimateQuota(m.snapshot, now);
-    return { ...m, quota, score: score(quota, config.weights), ready: ready(quota, config.threshold) };
+    return { ...m, quota, score: score(quota, config.weights), ready: m.identityVerified !== false && ready(quota, config.threshold) };
   });
   // Score bands anchored to the highest remaining score avoid a non-transitive
   // comparator ("within 5 points" on adjacent pairs cannot be sorted reliably).
@@ -71,7 +71,12 @@ export function rankCandidates(members, config, now = Date.now()) {
       ranked.push(...band);
     }
   }
-  return ranked;
+  return ranked.sort((a, b) => Number(b.ready) - Number(a.ready) || Number(a.identityVerified === false) - Number(b.identityVerified === false));
+}
+
+export function needsInitialInspection(view) {
+  return Boolean(view?.sessionConfigured && view.config?.adminConnectionId && view.config?.orgId &&
+    !view.lastCheckedAt && !view.error && !view.running && !view.pending);
 }
 
 export function nextReadyAt(members, threshold, now = Date.now()) {

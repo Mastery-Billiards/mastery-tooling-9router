@@ -6,6 +6,7 @@
   "scripts": {
     "fork:start": "node scripts/fork-launcher.cjs",
     "fork:prepare": "node scripts/sync-upstream.mjs --prepare",
+    "fork:deploy": "node scripts/sync-upstream.mjs --local",
     "fork:sync": "sh scripts/sync-upstream.sh",
     "dev": "next dev --port 20127",
     "dev:webpack": "next dev --webpack --port 20127",

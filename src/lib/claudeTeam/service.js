@@ -46,7 +46,12 @@ export async function configureTeam(body) {
     await teamStore.set("config", config);
   } finally { unlock(); }
   startTeamScheduler();
-  return teamView();
+  const view = await teamView();
+  if (view.sessionConfigured && view.config.adminConnectionId && view.config.orgId) {
+    try { return await checkTeam({ inspect: true }); }
+    catch { return teamView(); } // settings stay saved; worker error is shown in status
+  }
+  return view;
 }
 
 export async function discoverTeam() {

@@ -23,6 +23,7 @@ export async function runTeamCycle({ config, state, store, client, connections, 
   for (const tier of SEAT_TIERS) spareSeats(state.subscription, state.counts, tier);
   let remote = await client.members(config.orgId);
   const matched = [];
+  const displayed = new Set();
   state.excluded = [];
   for (const connection of connections) {
     let memberState = state.members[connection.id] || {};
@@ -36,16 +37,26 @@ export async function runTeamCycle({ config, state, store, client, connections, 
       memberState = { ...memberState, id: connection.id, memberId: member.account.uuid,
         email: profile.account.email || member.account.email_address, seatTier: member.seat_tier,
         hasReceivedSeat: memberState.hasReceivedSeat || Boolean(connection.lastUsedAt) || SEAT_TIERS.includes(member.seat_tier),
-        error: null, verifiedAt: new Date(now).toISOString() };
+        error: null, identityVerified: true, verifiedAt: new Date(now).toISOString() };
       state.members[connection.id] = memberState;
+      displayed.add(connection.id);
       matched.push({ ...memberState, connection });
     } catch (e) {
-      state.excluded.push({ id: connection.id, name: connection.name, reason: e.message });
+      // Membership data is enough to DISPLAY an account whose OAuth expired,
+      // but never enough to authorize seat/reset/routing mutations for it.
+      const email = String(connection.email || connection.name || "").trim().toLowerCase();
+      const member = remote.find((m) => String(m.account?.email_address || "").trim().toLowerCase() === email);
+      if (member) {
+        state.members[connection.id] = { ...memberState, id: connection.id, memberId: member.account.uuid,
+          email: member.account.email_address, seatTier: member.seat_tier,
+          hasReceivedSeat: memberState.hasReceivedSeat || Boolean(connection.lastUsedAt) || SEAT_TIERS.includes(member.seat_tier),
+          identityVerified: false, error: e.message };
+        displayed.add(connection.id);
+      } else state.excluded.push({ id: connection.id, name: connection.name, reason: e.message });
     }
   }
   // Deleted connections never remain eligible because of an old cached profile.
-  const ids = new Set(matched.map((m) => m.id));
-  state.visibleIds = [...ids];
+  state.visibleIds = [...displayed];
   state.lastCheckedAt = new Date(now).toISOString();
   state.error = null;
   await save();

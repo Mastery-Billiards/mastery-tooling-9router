@@ -6,8 +6,8 @@ Trang `/dashboard/claude-team` nằm ngay dưới Quota Tracker.
 
 1. Chọn connection OAuth của admin; không có email hay org ID hard-code.
 2. Nhập sessionKey web của cùng account, rồi Save settings. Session được mã hóa AES-256-GCM trong `DATA_DIR/claude-team`, ngoài settings/connection và response API. Khóa mã hóa nằm cùng thư mục, quyền file 0600; đây là bảo vệ dữ liệu lưu, không thay thế quyền truy cập máy chủ.
-3. Discover organizations, chọn org Team, rồi Save settings.
-4. Check data xác minh admin, membership, số seat đã mua và quota. Nút này không đổi seat, dùng reset hay bật/tắt connection.
+3. Discover organizations, chọn org Team, rồi Save settings. Cấu hình đầy đủ sẽ tự tải member/quota ở chế độ inspection. Nếu chưa có dữ liệu, mở lại trang cũng tự tải lần đầu.
+4. Refresh members & quota tải lại admin, membership, số seat đã mua và quota. Nút này không đổi seat, dùng reset hay bật/tắt connection.
 5. Bật Enable automatic seat rotation and limit resets, rồi Save settings. Run now chạy ngay; nếu không, scheduler tự chạy. Đăng nhập dashboard là bắt buộc cho API này, kể cả khi setting requireLogin của dashboard đang tắt.
 
 Session web không tự gia hạn bằng OAuth. Khi phiên hết hạn, nhập phiên mới. Không đưa `/tmp/ct-sk.txt` hay HAR vào Git. HAR hiện được ignore.
@@ -28,6 +28,7 @@ Session web không tự gia hạn bằng OAuth. Khi phiên hết hạn, nhập p
 
 - Xác minh identity/org bằng OAuth profile, không chỉ tên connection. Trim/lowercase tên chỉ phục vụ đối chiếu ban đầu; không dùng để cấp quyền mutation.
 - Chỉ account có trong 9router và xác minh thuộc org mới được quản lý. Member ngoài 9router vẫn được tính vào số seat đang dùng của toàn org, nhưng không bị đổi seat.
+- Account khớp danh sách member nhưng OAuth lỗi vẫn hiển thị trong bảng với cảnh báo, không được cấp/chuyển seat hay dùng reset tới khi xác minh OAuth thành công.
 - Dùng `subscription_details.seat_tier_quantities` và `members/counts`, trừ cả pending invites; đọc lại trước mọi lần gán. Không gọi endpoint mua hay tăng số lượng seat. Chuyển đúng tier; tự lấp seat đã mua đang trống.
 - Khóa worker bằng giao dịch SQLite. Trước thao tác ghi từ xa, lưu intent vào DB. PUT timeout phải đọc lại membership trước khi quyết định có thất bại hay không.
 - Bỏ seat cũ rồi mới cấp seat mới. Refresh OAuth và kiểm tra quota mới; chỉ bật account mới sau khi quota đạt ngưỡng, đồng thời xóa health/model locks cũ qua hàm activation hiện có.
@@ -74,6 +75,8 @@ Lệnh tương đương:
 ```sh
 npm run fork:sync
 ```
+
+Để triển khai commit sửa lỗi local mà không fetch/merge upstream hay push, dùng `npm run fork:deploy`. Lệnh này vẫn yêu cầu working tree sạch và vẫn build riêng, health-check, restart HTTP child và rollback nếu lỗi.
 
 Luồng chạy:
 

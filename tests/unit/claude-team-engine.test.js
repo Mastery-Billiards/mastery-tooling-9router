@@ -82,6 +82,19 @@ describe("Claude Team worker", () => {
     const t = setup(); t.client.usage.mockRejectedValue(new Error("HTTP 429")); await t.run();
     expect(t.client.setSeat).not.toHaveBeenCalled(); expect(t.state().members.source.error).toBe("HTTP 429");
   });
+  it("displays a known org member with expired OAuth but never assigns a seat to it", async () => {
+    const t = setup({ vacant: 1 });
+    t.connections[1].name = " target@example.org ";
+    const profile = t.client.profile;
+    t.client.profile = vi.fn(async (c) => { if (c.id === "target") throw new Error("Claude API HTTP 401"); return profile(c); });
+    await t.run();
+    expect(t.state().visibleIds).toContain("target");
+    expect(t.state().members.target.identityVerified).toBe(false);
+    expect(t.state().members.target.error).toContain("401");
+    expect(t.client.setSeat).not.toHaveBeenCalled();
+    expect(t.operations).not.toContainEqual(["route", "target", true]);
+    expect(t.state().excluded).toEqual([]);
+  });
   it("refuses an admin session that does not match selected OAuth identity", async () => {
     const t = setup(); t.client.account.mockResolvedValue({ uuid: "wrong", memberships: [{ role: "admin", organization: { uuid: "org" } }] });
     await expect(t.run()).rejects.toThrow("does not match"); expect(t.operations).toEqual([]);

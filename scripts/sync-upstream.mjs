@@ -11,6 +11,7 @@ const dir = path.join(root, ".fork");
 const statusFile = path.join(dir, "update-status.json");
 const lock = path.join(dir, "update.lock");
 const prepareOnly = process.argv.includes("--prepare");
+const localOnly = process.argv.includes("--local");
 const logDir = path.join(process.env.DATA_DIR || path.join(os.homedir(), ".9router"), "logs");
 fs.mkdirSync(dir, { recursive: true }); fs.mkdirSync(logDir, { recursive: true });
 const logFd = fs.openSync(path.join(logDir, "sync-upstream.log"), "a", 0o600);
@@ -63,7 +64,7 @@ try {
       catch (e) { if (e.code !== "ESRCH") throw e; }
     }
     if (!prepareOnly) process.kill(launcher.pid, 0);
-    if (!prepareOnly) {
+    if (!prepareOnly && !localOnly) {
       status("fetching");
       const remotes = (await command("git", ["remote"], root, true)).split("\n");
       if (!remotes.includes("upstream")) await command("git", ["remote", "add", "upstream", "https://github.com/decolua/9router.git"]);
@@ -116,9 +117,11 @@ try {
         status("rolled-back", { sha, message: "New release failed; previous release restored" });
         throw Object.assign(e, { reported: true });
       }
-      status("pushing", { sha });
-      try { await command("git", ["push", "origin", "HEAD"]); }
-      catch (e) { status("push-failed", { sha, message: "New release is running; push failed. Retry git push origin HEAD." }); throw Object.assign(e, { reported: true }); }
+      if (!localOnly) {
+        status("pushing", { sha });
+        try { await command("git", ["push", "origin", "HEAD"]); }
+        catch (e) { status("push-failed", { sha, message: "New release is running; push failed. Retry git push origin HEAD." }); throw Object.assign(e, { reported: true }); }
+      }
       status("done", { sha });
     }
   }
