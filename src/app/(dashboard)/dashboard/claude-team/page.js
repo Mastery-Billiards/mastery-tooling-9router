@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import Button from "@/shared/components/Button";
+import Modal from "@/shared/components/Modal";
 import { needsInitialInspection } from "@/lib/claudeTeam/policy";
 import { memberStatus, quotaDisplay, remainingResets, selectMembers, seatSummary } from "@/lib/claudeTeam/presentation";
 
@@ -86,7 +87,7 @@ export default function ClaudeTeamPage() {
   const [operation, setOperation] = useState(""), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [connectionError, setConnectionError] = useState("");
   const [sort, setSort] = useState("priority"), [search, setSearch] = useState(""), [filter, setFilter] = useState("all");
-  const [settingsOpen, setSettingsOpen] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [manualSource, setManualSource] = useState(null), [manualTargetId, setManualTargetId] = useState("");
   const load = useCallback(async (initial = false) => {
     const response = await fetch("/api/claude-team", { cache: "no-store" });
@@ -115,6 +116,7 @@ export default function ClaudeTeamPage() {
         setData(result);
         if (body.action === "configure") {
           setConfig(result.config); setSessionKey("");
+          if (!result.error && result.admin) setSettingsOpen(false);
           setNotice(result.error ? "Settings saved, but refreshing members failed. See the error above." : result.lastCheckedAt ? "Settings saved and members refreshed." : "Settings saved. Select an organization to finish setup.");
         } else if (body.action === "check") setNotice("Member data and quota refreshed. No seats or reset credits were changed.");
         else if (body.action === "rotate") {
@@ -145,7 +147,7 @@ export default function ClaudeTeamPage() {
   return <div className="p-4 sm:p-6 space-y-5 max-w-screen-2xl mx-auto min-w-0">
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div><h1 className="text-2xl font-semibold">Claude Team</h1><p className="text-sm text-text-muted mt-1">Seat allocation and quota for your 9router accounts.</p></div>
-      <div className="flex flex-wrap gap-2"><Button variant="secondary" loading={busy} onClick={() => action({ action: "check" })}>{operation === "configure" ? "Saving & refreshing…" : busy ? "Loading…" : "Refresh data"}</Button><Button disabled={busy || !data.config.enabled || dirty} title={dirty ? "Save your changes first" : !data.config.enabled ? "Enable automation in admin settings first" : "Run the configured seat rotation now"} onClick={() => action({ action: "run" })}>Run auto rules</Button></div>
+      <div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={() => setSettingsOpen(true)}>Settings{dirty ? " · Unsaved" : ""}</Button><Button variant="secondary" loading={busy} onClick={() => action({ action: "check" })}>{operation === "configure" ? "Saving & refreshing…" : busy ? "Loading…" : "Refresh data"}</Button><Button disabled={busy || !data.config.enabled || dirty} title={dirty ? "Save your changes first" : !data.config.enabled ? "Enable automation in Settings first" : "Run the configured seat rotation now"} onClick={() => action({ action: "run" })}>Run auto rules</Button></div>
     </header>
     {connectionError && <div role="alert" className="rounded-lg bg-amber-500/10 p-4 text-sm">{connectionError} Showing the last loaded data. <Link href="/login" className="underline">Sign in</Link></div>}
     {(error || data.error) && <div role="alert" className="rounded-lg bg-red-500/10 text-red-500 p-4 text-sm">{error || data.error}</div>}
@@ -162,8 +164,12 @@ export default function ClaudeTeamPage() {
     {next && <div className="rounded-lg border border-border-subtle px-4 py-3 text-sm"><span className="text-text-muted">Next candidate</span><b className="ml-2 break-all">{next.email}</b><span className="block mt-1 text-xs text-text-muted">{next.snapshot ? "Chosen using estimated quota. Actual quota is verified after assignment." : "No saved quota yet. This account is a candidate for verification, not confirmed to have full quota."}{!data.config.enabled ? " Automation is off; no allocation is scheduled." : ""}</span></div>}
     {data.pending && <div className="rounded-lg bg-amber-500/10 p-4 text-sm space-y-2"><p>An incomplete {data.pending.type} operation is saved. Recover it before starting another rotation. Automatic runs also reconcile it before new work.</p><Button variant="secondary" disabled={busy} onClick={() => action({ action: "recover" })}>Recover pending operation</Button></div>}
 
-    <details className={panel} open={settingsOpen ?? !data.admin} onToggle={(e) => setSettingsOpen(e.currentTarget.open)}>
-      <summary className="cursor-pointer select-none"><span className="font-semibold">Admin & automation settings</span><span className="block text-xs text-text-muted mt-1 pl-4">{data.admin ? `${data.admin.email} · ${data.admin.orgName} · verified` : "Configure the admin, web session and organization"}{dirty ? " · Unsaved changes" : ""}</span></summary>
+    {!complete && <p className="text-sm text-text-muted">Open Settings to configure the admin, web session and organization.</p>}
+    <Modal isOpen={settingsOpen} onClose={() => { if (!busy) setSettingsOpen(false); }} closeOnOverlay={!busy} title="Claude Team settings" size="full">
+      <div role="dialog" aria-modal="true" aria-label="Claude Team settings">
+      <p className="text-xs text-text-muted">{data.admin ? `${data.admin.email} · ${data.admin.orgName} · verified` : "Configure the admin, web session and organization"}</p>
+      {(error || data.error) && <p role="alert" className="mt-3 rounded-lg bg-red-500/10 p-3 text-sm text-red-500">{error || data.error}</p>}
+      {notice && <p role="status" className="mt-3 text-sm text-text-muted">{notice}</p>}
       <form className="mt-5 space-y-4" onSubmit={(e) => { e.preventDefault(); action({ action: "configure", config, ...(sessionKey ? { sessionKey } : {}) }); }}>
         <div className="grid lg:grid-cols-3 gap-4">
           <label className={labelClass}>Admin account<select className={field} value={config.adminConnectionId} onChange={(e) => patch("adminConnectionId", e.target.value)}><option value="">Select account</option>{data.accounts.map((a) => <option key={a.id} value={a.id}>{a.email || a.name}</option>)}</select></label>
@@ -173,10 +179,11 @@ export default function ClaudeTeamPage() {
         <div className="grid sm:grid-cols-3 gap-4">{[["threshold", "Rotate at % remaining", 1, 30], ["resetThreshold", "Use reset at % remaining", 0, 5], ["intervalMinutes", "Check interval (minutes)", 1, 60]].map(([key, label, min, max]) => <label key={key} className={labelClass}>{label}<input type="number" min={min} max={max} className={field} value={config[key]} onChange={(e) => patch(key, Number(e.target.value))} /></label>)}</div>
         <label className="flex items-start gap-2 text-sm"><input className="mt-0.5" type="checkbox" checked={config.enabled} onChange={(e) => patch("enabled", e.target.checked)} /><span>Enable automatic seat rotation and limit resets<span className="block text-xs text-text-muted mt-1">Takes effect only after saving. Uses prepaid seats only.</span></span></label>
         <details className="rounded-lg border border-border-subtle p-3"><summary className="cursor-pointer text-sm">Advanced selection & reset rules</summary><div className="pt-4 space-y-4"><div className="grid sm:grid-cols-3 gap-4">{["fable", "weekly", "session"].map((key) => <label key={key} className={labelClass}>{key === "session" ? "5h" : key === "fable" ? "Fable" : "Weekly"} priority weight (%)<input type="number" min="0" max="100" step="1" className={field} value={Math.round(config.weights[key] * 100)} onChange={(e) => patch("weights", { ...config.weights, [key]: Number(e.target.value) / 100 })} /></label>)}</div><p className="text-xs text-text-muted">Weights are normalized automatically. New members take priority on the next allocation, without displacing a healthy seat holder.</p><label className="flex items-start gap-2 text-sm"><input className="mt-0.5" type="checkbox" checked={config.expiringReset} onChange={(e) => patch("expiringReset", e.target.checked)} /><span>Use a reset expiring within 24 hours when weekly or Fable has less than 20% left.</span></label></div></details>
-        <div className="flex flex-wrap items-center gap-2"><Button type="submit" disabled={busy}>Save & refresh members</Button><Button type="button" variant="secondary" disabled={busy || !data.sessionConfigured} onClick={() => action({ action: "discover" })}>Discover organizations</Button>{dirty && <span className="text-xs text-amber-500" role="status">Unsaved changes</span>}</div>
+        <div className="flex flex-wrap items-center gap-2"><Button type="submit" disabled={busy} loading={operation === "configure"}>Save & refresh members</Button><Button type="button" variant="secondary" disabled={busy || !data.sessionConfigured} onClick={() => action({ action: "discover" })}>Discover organizations</Button><Button type="button" variant="ghost" disabled={busy} onClick={() => setSettingsOpen(false)}>Close</Button>{dirty && <span className="text-xs text-amber-500" role="status">Unsaved changes</span>}</div>
         <p className="text-xs text-text-muted">First setup: save the admin and session, discover and select the organization, then save again. Refreshing data does not enable automation.</p>
       </form>
-    </details>
+      </div>
+    </Modal>
 
     {!data.lastCheckedAt && complete && <div role="status" className="rounded-lg bg-amber-500/10 p-4 text-sm">{busy ? "Verifying admin and loading members…" : "Members have not loaded yet."}<Button variant="secondary" className="ml-3" disabled={busy} onClick={() => action({ action: "check" })}>Load members</Button></div>}
     <div className="flex flex-wrap items-center gap-3"><label className="flex-1 min-w-48 max-w-sm"><span className="sr-only">Search member email</span><input type="search" className={field} placeholder="Search member email…" value={search} onChange={(e) => setSearch(e.target.value)} /></label>{search && <Button variant="ghost" onClick={() => setSearch("")}>Clear search</Button>}<p className="text-xs text-text-muted">All percentages mean quota remaining.</p></div>
@@ -203,7 +210,6 @@ export default function ClaudeTeamPage() {
       <p className="text-xs text-text-muted my-3">Not measured = no saved quota. ~ = estimated from a previous measurement; it may differ after assigning a different seat type.</p>
       <MemberList members={waiting} waiting busy={busy} loaded={Boolean(data.lastCheckedAt)} filtered={Boolean(search) || filter !== "all"} />
     </section>
-    {!!data.excluded.length && <details className={panel}><summary className="cursor-pointer text-sm font-medium">Outside this rotation ({data.excluded.length})</summary><div className="pt-3 space-y-2">{data.excluded.map((m) => <p key={m.id} className="text-sm break-all">{m.name}<span className="text-text-muted"> · {m.reason}</span></p>)}</div></details>}
     <details className={panel}><summary className="cursor-pointer text-sm font-medium">Seat & reset history ({data.history.length})</summary><div className="max-h-96 overflow-auto space-y-3 pt-4">{data.history.map((event) => <div key={event.id} className="border-b border-border-subtle pb-2 text-sm"><time className="text-text-muted">{date(event.at)}</time> · <b>{event.type}</b>{event.mode ? ` · ${event.mode}` : ""} · {event.account || [event.from || "Empty seat", event.to].filter(Boolean).join(" → ")}{event.tier ? ` · ${tier(event.tier)}` : ""}{event.error ? ` · ${event.error}` : ""}</div>)}{!data.history.length && <p className="text-sm text-text-muted">No seat changes or limit resets have run yet.</p>}</div></details>
   </div>;
 }
