@@ -16,6 +16,7 @@ export async function POST(request) {
     else if (body.action === "check") data = await checkTeam({ inspect: true, onlyConnectionId: body.connectionId || null });
     else if (body.action === "run") data = await checkTeam({ inspect: false });
     else if (body.action === "rotate") data = await checkTeam({ inspect: false, manual: { sourceId: body.sourceId, targetId: body.targetId, expectedTier: body.expectedTier } });
+    else if (body.action === "measure-waiting") data = await checkTeam({ inspect: false, survey: { sourceId: body.sourceId, expectedTier: body.expectedTier } });
     else if (body.action === "recover") data = await checkTeam({ inspect: false, recoverOnly: true });
     else return Response.json({ error: "Unknown action" }, { status: 400 });
     return Response.json(data, { headers: { "Cache-Control": "no-store" } });

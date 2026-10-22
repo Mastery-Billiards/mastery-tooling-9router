@@ -99,6 +99,7 @@ export default function ClaudeTeamPage() {
   const [connectionError, setConnectionError] = useState("");
   const [search, setSearch] = useState(""), [filter, setFilter] = useState("all");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [surveyOpen, setSurveyOpen] = useState(false), [surveySource, setSurveySource] = useState(null);
   const [allocationTier, setAllocationTier] = useState("all");
   const [manualSource, setManualSource] = useState(null), [manualTargetId, setManualTargetId] = useState("");
   const load = useCallback(async (initial = false) => {
@@ -134,6 +135,10 @@ export default function ClaudeTeamPage() {
         else if (body.action === "rotate") {
           setManualSource(null); setManualTargetId("");
           setNotice("Seat transferred and replacement quota verified. Routing, history and the next automatic check are updated.");
+        } else if (body.action === "measure-waiting") {
+          setSurveyOpen(false); setSurveySource(null);
+          setAllocationTier(result.survey.tier);
+          setNotice(`Seat returned. ${result.survey.completed - result.survey.failed} accounts measured, ${result.survey.failed} failed, ${result.survey.skipped} skipped (OAuth). Waiting priority is updated for ${tier(result.survey.tier)}.`);
         } else if (body.action === "recover") setNotice("Pending transaction reconciled. Review the current seats before starting another rotation.");
       }
     } catch (e) { setError(e.message); await load().catch(() => {}); }
@@ -152,6 +157,8 @@ export default function ClaudeTeamPage() {
   const suggestions = (data.candidatesByTier?.[source?.seatTier] || data.waiting).filter((m) => m.ready);
   const target = suggestions.find((m) => m.id === manualTargetId);
   const canRotate = source && source.identityVerified !== false && source.seatTier === manualSource.tier && target && !busy && !dirty && !data.pending;
+  const lender = data.seated.find((m) => m.id === surveySource?.id);
+  const canMeasure = lender && lender.identityVerified !== false && lender.seatTier === surveySource.tier && !busy && !dirty && !data.pending;
   const seated = selectMembers(data.seated, { search, sort: "email" });
   const waiting = selectMembers(allocationCandidates, { search, filter });
   const complete = Boolean(data.config.adminConnectionId && data.config.orgId && data.sessionConfigured);
@@ -179,6 +186,16 @@ export default function ClaudeTeamPage() {
     {data.pending && <div className="rounded-lg bg-amber-500/10 p-4 text-sm space-y-2"><p>An incomplete {data.pending.type} operation is saved. Recover it before starting another rotation. Automatic runs also reconcile it before new work.</p><Button variant="secondary" disabled={busy} onClick={() => action({ action: "recover" })}>Recover pending operation</Button></div>}
 
     {!complete && <p className="text-sm text-text-muted">Open Settings to configure the admin, web session and organization.</p>}
+    <Modal isOpen={surveyOpen} onClose={() => { if (!busy) setSurveyOpen(false); }} closeOnOverlay={!busy} title="Measure waiting accounts" size="md">
+      <div className="space-y-4" role="dialog" aria-modal="true" aria-label="Measure waiting accounts">
+        <p className="text-sm text-text-muted">Temporarily borrow one seat to measure every waiting account in this organization, including accounts hidden by filters. The seat is returned after each measurement. Accounts needing OAuth are skipped.</p>
+        <label className={labelClass}>Borrow seat from<select className={field} value={surveySource?.id || ""} disabled={busy} onChange={(e) => { const m = data.seated.find((row) => row.id === e.target.value); setSurveySource(m ? { id: m.id, tier: m.seatTier } : null); }}><option value="">Select a seat holder</option>{data.seated.filter((m) => m.identityVerified !== false).map((m) => <option key={m.id} value={m.id}>{m.email} · {tier(m.seatTier)}</option>)}</select></label>
+        <p className="text-sm text-text-muted">{lender ? `Measures ${tier(lender.seatTier)} quota only. ` : ""}The lender is temporarily removed from routing while its seat is borrowed. Waiting accounts stay out of routing. Automatic rotation waits until the scan finishes; reset credits are not used.</p>
+        {(error || data.error) && <p role="alert" className="text-sm text-red-500">{error || data.error}</p>}
+        {data.survey?.status === "running" && <p role="status" className="text-sm">{data.survey.completed} / {data.survey.total} checked · {data.worker?.account || "Returning seat…"}</p>}
+        <div className="flex justify-end gap-2"><Button variant="secondary" disabled={busy} onClick={() => setSurveyOpen(false)}>Cancel</Button><Button disabled={!canMeasure} loading={operation === "measure-waiting"} onClick={() => action({ action: "measure-waiting", sourceId: lender.id, expectedTier: surveySource.tier })}>Measure all waiting accounts</Button></div>
+      </div>
+    </Modal>
     <Modal isOpen={settingsOpen} onClose={() => { if (!busy) setSettingsOpen(false); }} closeOnOverlay={!busy} title="Claude Team settings" size="full">
       <div role="dialog" aria-modal="true" aria-label="Claude Team settings">
       <p className="text-xs text-text-muted">{data.admin ? `${data.admin.email} · ${data.admin.orgName} · verified` : "Configure the admin, web session and organization"}</p>
@@ -220,8 +237,9 @@ export default function ClaudeTeamPage() {
       </>}
     </section>
     <section id="waiting-members" className={`${panel} scroll-mt-4`} aria-labelledby="waiting-title">
-      <div className="flex flex-wrap justify-between items-center gap-3"><div><h2 id="waiting-title" className="text-lg font-semibold">Waiting for a seat <span className="text-sm font-normal text-text-muted">{waiting.length}{search || filter !== "all" ? ` of ${data.waiting.length}` : ""}</span></h2><p className="text-xs text-text-muted mt-1">{readyCount} accounts eligible for verification · {tier(allocationTier)} · Quota is checked after receiving a seat.</p></div><div className="flex flex-wrap gap-2"><select aria-label="Seat tier for waiting accounts" className={field.replace("w-full", "w-auto")} value={allocationTier} onChange={(e) => setAllocationTier(e.target.value)}><option value="all">All plans</option><option value="team_standard">Standard seat</option><option value="team_tier_1">Premium seat</option></select><select aria-label="Filter waiting accounts" className={field.replace("w-full", "w-auto")} value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">All statuses</option><option value="ready">Ready to verify</option><option value="auth">Needs OAuth</option><option value="waiting">Waiting for reset</option></select></div></div>
+      <div className="flex flex-wrap justify-between items-center gap-3"><div><h2 id="waiting-title" className="text-lg font-semibold">Waiting for a seat <span className="text-sm font-normal text-text-muted">{waiting.length}{search || filter !== "all" ? ` of ${data.waiting.length}` : ""}</span></h2><p className="text-xs text-text-muted mt-1">{readyCount} accounts eligible for verification · {tier(allocationTier)} · Quota is checked after receiving a seat.</p></div><div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={busy || dirty || !complete || Boolean(data.pending) || !data.waiting.length} onClick={() => { setError(""); setSurveyOpen(true); }}>Measure waiting quota</Button><select aria-label="Seat tier for waiting accounts" className={field.replace("w-full", "w-auto")} value={allocationTier} onChange={(e) => setAllocationTier(e.target.value)}><option value="all">All plans</option><option value="team_standard">Standard seat</option><option value="team_tier_1">Premium seat</option></select><select aria-label="Filter waiting accounts" className={field.replace("w-full", "w-auto")} value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">All statuses</option><option value="ready">Ready to verify</option><option value="auth">Needs OAuth</option><option value="waiting">Waiting for reset</option></select></div></div>
       <p className="text-xs text-text-muted my-3">{allocationTier === "all" ? "Ordered by next-seat priority: known usable quota first, then accounts needing verification, then accounts waiting for reset. Within each group, the best priority rank across eligible plans comes first. The next seat’s plan determines the actual selection. Quota columns show the last recorded measurement and its plan; balances from different plans are never combined." : "Candidates and quota below apply to the selected tier. ~ = estimate from that tier. Another tier’s measurement or a stale balance is not presented as current quota."}</p>
+      {data.survey && <p role="status" className="text-xs text-text-muted mb-3">Last quota scan · {tier(data.survey.tier)} · {data.survey.status} · {data.survey.completed} / {data.survey.total} checked · {data.survey.failed} failed · {data.survey.skipped} skipped{data.survey.completedAt ? ` · ${date(data.survey.completedAt)}` : ""}</p>}
       <MemberList config={data.config} members={waiting} waiting busy={busy} loaded={Boolean(data.lastCheckedAt)} filtered={Boolean(search) || filter !== "all"} />
     </section>
     <details className={panel}><summary className="cursor-pointer text-sm font-medium">Seat & reset history ({data.history.length})</summary><div className="max-h-96 overflow-auto space-y-3 pt-4">{data.history.map((event) => <div key={event.id} className="border-b border-border-subtle pb-3"><Activity event={event} /></div>)}{!data.history.length && <p className="text-sm text-text-muted">No seat changes or limit resets have run yet.</p>}</div></details>

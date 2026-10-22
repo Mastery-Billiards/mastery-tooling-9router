@@ -208,3 +208,92 @@ it("can reject an account for Premium yet verify it for a free Standard seat in 
   expect(t.state().members.target.snapshotsByTier.team_standard.session.remaining).toBe(90);
   expect(t.operations.at(-1)).toEqual(["route", "target", true]);
 });
+
+
+describe("borrowed-seat quota scans", () => {
+  const survey = { sourceId: "source", expectedTier: "team_tier_1" };
+  it("measures all verified waiting accounts, returns the seat between targets and preserves priority flags", async () => {
+    const t = setup({ quotaLeft: 90 }); t.config.enabled = false;
+    t.connections.push({ id: "second", isActive: false });
+    t.remote.push({ account: { uuid: "second", email_address: "second@example.org" }, seat_tier: "unassigned" });
+    await t.run({ survey });
+    expect(t.operations.filter(o => o[0] === "seat")).toEqual([
+      ["seat", "source", "unassigned"], ["seat", "target", "team_tier_1"],
+      ["seat", "target", "unassigned"], ["seat", "source", "team_tier_1"],
+      ["seat", "source", "unassigned"], ["seat", "second", "team_tier_1"],
+      ["seat", "second", "unassigned"], ["seat", "source", "team_tier_1"],
+    ]);
+    expect(t.state().survey).toMatchObject({ status: "completed", completed: 2, failed: 0, skipped: 0 });
+    for (const id of ["target", "second"]) {
+      expect(t.state().members[id].snapshotsByTier.team_tier_1.session.remaining).toBe(90);
+      expect(t.state().members[id].seatTier).toBe("unassigned");
+      expect(t.state().members[id].hasReceivedSeat).toBe(false);
+      expect(t.operations).not.toContainEqual(["route", id, true]);
+    }
+    expect(t.state().pending).toBeNull();
+    expect(t.remote[0].seat_tier).toBe("team_tier_1");
+    expect(t.operations.at(-1)).toEqual(["route", "source", true]);
+    expect(t.client.reset).not.toHaveBeenCalled();
+  });
+  it("returns the borrowed seat even when quota reads fail", async () => {
+    const t = setup();
+    t.client.usage.mockImplementation(async c => { if (c.id === "target") throw new Error("quota unavailable"); return { seven_day: { utilization: 20 } }; });
+    await t.run({ survey });
+    expect(t.state().survey).toMatchObject({ status: "completed", completed: 1, failed: 1 });
+    expect(t.state().members.target.error).toBe("quota unavailable");
+    expect(t.state().pending).toBeNull();
+    expect(t.remote[0].seat_tier).toBe("team_tier_1");
+  });
+  it("recovers a crash by returning even a healthy target's seat, never completing a rotation", async () => {
+    const t = setup(); const original = t.client.setSeat;
+    t.client.setSeat = vi.fn(async (org, id, tier) => { if (id === "target" && tier === "unassigned") throw new Error("network"); return original(org, id, tier); });
+    await expect(t.run({ survey })).rejects.toThrow("network");
+    expect(t.state().pending.type).toBe("quota-survey");
+    await expect(t.run({ survey })).rejects.toThrow("Recover the pending");
+    t.client.setSeat = original;
+    await t.run({ inspect: true });
+    expect(t.state().members.target.hasReceivedSeat).toBe(false);
+    await t.run();
+    expect(t.state().pending).toBeNull();
+    expect(t.state().survey.status).toBe("interrupted");
+    expect(t.remote[0].seat_tier).toBe("team_tier_1");
+    expect(t.remote[1].seat_tier).toBe("unassigned");
+    expect(t.operations).not.toContainEqual(["route", "target", true]);
+    expect(t.state().history.some(e => e.type === "seat-transferred")).toBe(false);
+  });
+  it("validates the chosen tier before mutation and preserves inactive lender routing", async () => {
+    const t = setup();
+    await expect(t.run({ survey: { ...survey, expectedTier: "team_standard" } })).rejects.toThrow("Select a verified seat holder");
+    expect(t.operations).toEqual([]);
+    t.connections[0].isActive = false;
+    await t.run({ survey });
+    expect(t.operations).not.toContainEqual(["route", "source", true]);
+    expect(t.operations.at(-1)).toEqual(["route", "source", false]);
+  });
+  it("skips unverified OAuth accounts and does not mutate without verified targets", async () => {
+    const t = setup(); t.connections[1].name = "target@example.org";
+    const profile = t.client.profile;
+    t.client.profile = vi.fn(async c => { if (c.id === "target") throw new Error("401"); return profile(c); });
+    await expect(t.run({ survey })).rejects.toThrow("No verified waiting accounts");
+    expect(t.operations).toEqual([]);
+  });
+});
+
+
+it("aborts a scan on assignment failure after restoring the lender", async () => {
+  const t = setup(); const original = t.client.setSeat;
+  t.client.setSeat = vi.fn(async (org, id, tier) => { if (id === "target" && tier !== "unassigned") throw new Error("assignment rejected"); return original(org, id, tier); });
+  await expect(t.run({ survey: { sourceId: "source", expectedTier: "team_tier_1" } })).rejects.toThrow("assignment rejected");
+  expect(t.state().pending).toBeNull();
+  expect(t.remote[0].seat_tier).toBe("team_tier_1");
+  expect(t.operations.at(-1)).toEqual(["route", "source", true]);
+});
+
+it("records exhausted quota without trying to rotate or consume reset grants during a scan", async () => {
+  const t = setup({ quotaLeft: 1, candidateLeft: 0 });
+  await t.run({ survey: { sourceId: "source", expectedTier: "team_tier_1" } });
+  expect(t.state().survey).toMatchObject({ completed: 1, failed: 0 });
+  expect(t.state().members.target.snapshot.session.remaining).toBe(0);
+  expect(t.client.reset).not.toHaveBeenCalled();
+  expect(t.remote[0].seat_tier).toBe("team_tier_1");
+});

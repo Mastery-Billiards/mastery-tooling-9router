@@ -63,7 +63,7 @@ export function recommendationReasons(member, config) {
 }
 
 export function automationStatus(data) {
-  const phases = { "checking-members": "Verifying membership", "checking-quota": "Reading quota", "transferring-seat": "Transferring seat", "verifying-replacement": "Verifying replacement quota", "resetting-limits": "Resetting limits", recovering: "Recovering transaction" };
+  const phases = { "borrowing-seat": "Borrowing seat", "measuring-waiting-quota": "Measuring waiting accounts", "returning-borrowed-seat": "Returning borrowed seat", "checking-members": "Verifying membership", "checking-quota": "Reading quota", "transferring-seat": "Transferring seat", "verifying-replacement": "Verifying replacement quota", "resetting-limits": "Resetting limits", recovering: "Recovering transaction" };
   if (data.running) return { tone: "warning", label: phases[data.worker?.phase] || "Checking", detail: data.worker?.account || "Worker is running" };
   if (data.pending) return { tone: "danger", label: "Recovery required", detail: "Recover the saved transaction before starting new work." };
   if (data.error) return { tone: "danger", label: "Last check failed", detail: "Retry the check or review Settings and account authentication." };
@@ -74,7 +74,7 @@ export function automationStatus(data) {
   return { tone: "success", label: "Waiting for next check", detail: "Monitoring quota and reset times; healthy seat holders keep their seats." };
 }
 
-export const activityLabel = (type) => ({ "operation-failed": "Operation failed", "seat-transferred": "Seat transfer completed", "candidate-exhausted": "Replacement rejected", "seat-rollback": "Seat restored / assignment undone", "limit-reset": "Limits reset", "reset-unconfirmed": "Reset not confirmed", "reset-reconciled": "Reset reconciled", "oauth-reconnected": "OAuth reconnected" }[type] || type);
+export const activityLabel = (type) => ({ "quota-survey-measured": "Waiting quota measured", "quota-survey-failed": "Waiting quota measurement failed", "quota-survey-completed": "Waiting quota scan completed", "quota-survey-interrupted": "Borrowed seat recovered", "operation-failed": "Operation failed", "seat-transferred": "Seat transfer completed", "candidate-exhausted": "Replacement rejected", "seat-rollback": "Seat restored / assignment undone", "limit-reset": "Limits reset", "reset-unconfirmed": "Reset not confirmed", "reset-reconciled": "Reset reconciled", "oauth-reconnected": "OAuth reconnected" }[type] || type);
 
 // Merge plan queues using their existing priority ranks, never cross-tier quota scores.
 function allocationPriority(row) {

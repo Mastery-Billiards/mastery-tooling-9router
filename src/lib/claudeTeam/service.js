@@ -24,7 +24,7 @@ export async function teamView() {
     seated: visible.filter((m) => SEAT_TIERS.includes(m.seatTier)),
     waiting, candidatesByTier,
     excluded: state.excluded || [], history: state.history || [], pending: state.pending || null,
-    worker: state.worker || null, lastAutoSuccessAt: state.lastAutoSuccessAt || null,
+    survey: state.survey || null, worker: state.worker || null, lastAutoSuccessAt: state.lastAutoSuccessAt || null,
     lastCheckedAt: state.lastCheckedAt, nextRunAt: state.nextRunAt, error: state.error || null };
 }
 
@@ -70,15 +70,16 @@ export async function discoverTeam() {
     .map((m) => ({ id: m.organization.uuid, name: m.organization.name, role: m.role })) };
 }
 
-export async function checkTeam({ inspect = true, scheduled = false, onlyConnectionId = null, manual = null, recoverOnly = false } = {}) {
+export async function checkTeam({ inspect = true, scheduled = false, onlyConnectionId = null, manual = null, survey = null, recoverOnly = false } = {}) {
   const unlock = await acquireTeamLock();
   if (!unlock) { if (scheduled) return; throw new Error("Claude Team worker is busy"); }
   scheduler.running = true;
   let workerStarted = false;
   try {
     const config = normalizeConfig(await teamStore.get("config", DEFAULT_CONFIG));
-    if (!inspect && !config.enabled && !manual && !recoverOnly) throw new Error("Enable automatic rotation first");
+    if (!inspect && !config.enabled && !manual && !survey && !recoverOnly) throw new Error("Enable automatic rotation first");
     if (manual && (inspect || !manual.sourceId || !manual.targetId || !SEAT_TIERS.includes(manual.expectedTier))) throw new Error("Select a seat holder and replacement account");
+    if (survey && (inspect || !survey.sourceId || !SEAT_TIERS.includes(survey.expectedTier))) throw new Error("Select an account to lend its seat");
     const session = loadSession();
     if (!session) throw new Error("Configure admin web session first");
     const state = await teamStore.get("state", { members: {}, history: [] });
@@ -88,19 +89,20 @@ export async function checkTeam({ inspect = true, scheduled = false, onlyConnect
     const admin = connections.find((c) => c.id === config.adminConnectionId);
     const proxy = admin ? await resolveConnectionProxyConfig(admin.providerSpecificData) : null;
     workerStarted = true;
-    state.worker = { phase: "checking-members", startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), kind: manual ? "manual" : inspect ? "inspection" : recoverOnly ? "recovery" : "automatic" };
+    state.worker = { phase: "checking-members", startedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), kind: survey ? "measurement" : manual ? "manual" : inspect ? "inspection" : recoverOnly ? "recovery" : "automatic" };
     await teamStore.set("state", state);
     await runTeamCycle({ config, state, store: teamStore, client: createTeamClient(session, proxy), connections,
-      updateConnection: updateProviderConnection, inspect, onlyConnectionId, manual, recoverOnly });
+      updateConnection: updateProviderConnection, inspect, onlyConnectionId, manual, survey, recoverOnly });
     const completed = await teamStore.get("state", {});
     completed.worker = { ...completed.worker, phase: "idle", account: null, completedAt: new Date().toISOString() };
     const quotaErrors = (completed.visibleIds || []).some((id) => SEAT_TIERS.includes(completed.members?.[id]?.seatTier) && completed.members[id].error);
-    if (!inspect && !manual && !recoverOnly && !completed.pending && !quotaErrors) completed.lastAutoSuccessAt = completed.worker.completedAt;
+    if (!inspect && !manual && !survey && !recoverOnly && !completed.pending && !quotaErrors) completed.lastAutoSuccessAt = completed.worker.completedAt;
     await teamStore.set("state", completed);
   } catch (e) {
     if (workerStarted) {
       const state = await teamStore.get("state", { members: {}, history: [] });
       state.error = e.message;
+      if (survey && state.survey?.status === "running") state.survey = { ...state.survey, status: state.pending ? "recovery-required" : "failed", completedAt: new Date().toISOString() };
       state.history = [{ id: randomUUID(), at: new Date().toISOString(), type: "operation-failed", mode: state.worker?.kind,
         phase: state.worker?.phase, from: state.members?.[state.pending?.sourceId]?.email || null,
         to: state.members?.[state.pending?.targetId]?.email || null, account: state.pending ? null : state.worker?.account || null,
