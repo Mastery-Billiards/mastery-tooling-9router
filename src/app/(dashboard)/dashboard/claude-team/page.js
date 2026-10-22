@@ -99,7 +99,7 @@ export default function ClaudeTeamPage() {
   const [connectionError, setConnectionError] = useState("");
   const [sort, setSort] = useState("priority"), [search, setSearch] = useState(""), [filter, setFilter] = useState("all");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [allocationTier, setAllocationTier] = useState("team_standard");
+  const [allocationTier, setAllocationTier] = useState("all");
   const [manualSource, setManualSource] = useState(null), [manualTargetId, setManualTargetId] = useState("");
   const load = useCallback(async (initial = false) => {
     const response = await fetch("/api/claude-team", { cache: "no-store" });
