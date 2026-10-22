@@ -38,6 +38,8 @@ describe("saving Claude Team settings", () => {
     vi.useFakeTimers();
     const view = await configureTeam({ config: { adminConnectionId: "admin", orgId: "71f09ff4-2c3e-44da-91de-7917610a646d" } });
     expect(view.seated).toHaveLength(1); expect(view.waiting).toHaveLength(1);
+    expect(view.candidatesByTier.team_standard[0]).toMatchObject({ targetTier: "team_standard", score: null, quotaConfidence: "unknown" });
+    expect(view.candidatesByTier.team_tier_1[0]).toMatchObject({ targetTier: "team_tier_1", score: null, quotaConfidence: "unknown" });
     expect(view.lastCheckedAt).toBeTruthy(); expect(view.admin.email).toBe("admin@example.org");
     expect(view.config.enabled).toBe(false);
     expect(mock.client.setSeat).not.toHaveBeenCalled(); expect(mock.client.reset).not.toHaveBeenCalled(); expect(mock.update).not.toHaveBeenCalled();

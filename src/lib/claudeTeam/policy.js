@@ -54,20 +54,57 @@ export function score(quota, weights) {
   return sum ? total / sum : 0;
 }
 
-export function rankCandidates(members, config, now = Date.now()) {
+function tierSnapshots(member) {
+  return { ...(SEAT_TIERS.includes(member.snapshot?.tier) ? { [member.snapshot.tier]: member.snapshot } : {}), ...member.snapshotsByTier };
+}
+
+// Snapshots are measurements of one shared account balance under a specific
+// seat tier, not independent balances. Other-tier use makes positive estimates stale.
+export function recordTierQuota(member, tier, snapshot) {
+  if (!SEAT_TIERS.includes(tier)) throw new Error("Cannot measure quota without a supported seat tier");
+  const snapshotsByTier = Object.fromEntries(Object.entries(tierSnapshots(member)).map(([key, value]) => [key, { ...value, stale: key !== tier }]));
+  const measured = { ...snapshot, tier, stale: false };
+  snapshotsByTier[tier] = measured;
+  return { snapshot: measured, snapshotsByTier };
+}
+
+export function invalidateOtherTiers(member, tier) {
+  if (!SEAT_TIERS.includes(tier)) return;
+  member.snapshotsByTier = Object.fromEntries(Object.entries(tierSnapshots(member)).map(([key, value]) => [key, key === tier ? value : { ...value, stale: true }]));
+}
+
+export function quotaForTier(member, tier, now = Date.now()) {
+  if (!SEAT_TIERS.includes(tier)) throw new Error("Select a supported seat tier");
+  const snapshot = member.snapshotsByTier?.[tier] || (member.snapshot?.tier === tier ? member.snapshot : null);
+  const quota = snapshot ? estimateQuota(snapshot, now) : null;
+  // A stale low balance remains a conservative exclusion until its reset. This
+  // prevents repeated failed probes alternating tiers from reviving one another.
+  return { snapshot, quota, stale: Boolean(snapshot?.stale) };
+}
+
+export function rankCandidates(members, config, now = Date.now(), targetTier = "team_standard") {
   const list = members.map((m) => {
-    const quota = estimateQuota(m.snapshot, now);
-    return { ...m, quota, score: score(quota, config.weights), ready: m.identityVerified !== false && ready(quota, config.threshold) };
+    const assessment = quotaForTier(m, targetTier, now);
+    const blocked = Boolean(assessment.quota && !ready(assessment.quota, config.threshold));
+    const known = Boolean(assessment.snapshot && !assessment.stale);
+    const quota = known ? assessment.quota : null;
+    return { ...m, targetTier, quota, quotaSnapshot: known ? assessment.snapshot : null,
+      quotaConfidence: blocked ? "blocked" : known ? "estimated" : "unknown",
+      score: quota ? score(quota, config.weights) : null,
+      ready: m.identityVerified !== false && !blocked };
   });
-  // Score bands anchored to the highest remaining score avoid a non-transitive
-  // comparator ("within 5 points" on adjacent pairs cannot be sorted reliably).
   const ranked = [];
-  for (const fresh of [true, false]) {
-    const pool = list.filter((m) => !m.hasReceivedSeat === fresh).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  // Known usable balances precede probes. New-member priority remains within
+  // each confidence group; unknown balances never masquerade as a score of 100.
+  const groups = ["estimated", "unknown", "blocked"];
+  for (const confidence of groups) for (const fresh of [true, false]) {
+    const pool = list.filter((m) => (!confidence || m.quotaConfidence === confidence) && !m.hasReceivedSeat === fresh)
+      .sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || a.id.localeCompare(b.id));
     while (pool.length) {
       const anchor = pool[0].score;
-      const band = pool.splice(0, pool.findIndex((m) => anchor - m.score >= 5) < 0 ? pool.length : pool.findIndex((m) => anchor - m.score >= 5));
-      band.sort((a, b) => (Date.parse(a.quota.weekly?.resetAt) || Infinity) - (Date.parse(b.quota.weekly?.resetAt) || Infinity) || b.score - a.score || a.id.localeCompare(b.id));
+      const split = pool.findIndex((m) => anchor !== null && m.score !== null && anchor - m.score >= 5);
+      const band = pool.splice(0, split < 0 ? pool.length : split);
+      band.sort((a, b) => (Date.parse(a.quota?.weekly?.resetAt) || Infinity) - (Date.parse(b.quota?.weekly?.resetAt) || Infinity) || (b.score ?? -1) - (a.score ?? -1) || a.id.localeCompare(b.id));
       ranked.push(...band);
     }
   }
@@ -79,9 +116,10 @@ export function needsInitialInspection(view) {
     !view.lastCheckedAt && !view.error && !view.running && !view.pending);
 }
 
-export function nextReadyAt(members, threshold, now = Date.now()) {
+export function nextReadyAt(members, threshold, now = Date.now(), targetTier = null) {
   const times = members.map((m) => {
-    const quota = estimateQuota(m.snapshot, now);
+    const quota = targetTier ? quotaForTier(m, targetTier, now).quota : estimateQuota(m.snapshot, now);
+    if (!quota) return now;
     const blocked = [quota.session, quota.weekly, quota.fable].filter((q) => q && q.remaining <= threshold);
     if (!blocked.length) return now;
     const resets = blocked.map((q) => Date.parse(q.resetAt));

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { SEAT_TIERS, parseQuota, ready, rankCandidates, decideAction, nextReadyAt, spareSeats } from "./policy";
+import { SEAT_TIERS, parseQuota, ready, rankCandidates, decideAction, nextReadyAt, spareSeats, recordTierQuota, invalidateOtherTiers } from "./policy";
 
 // All mutations pass through this worker. store.set must finish before a remote
 // write: after a crash the next worker reconciles the durable intent first.
@@ -41,6 +41,7 @@ export async function runTeamCycle({ config, state, store, client, connections, 
         email: profile.account.email || member.account.email_address, seatTier: member.seat_tier,
         hasReceivedSeat: memberState.hasReceivedSeat || Boolean(connection.lastUsedAt) || SEAT_TIERS.includes(member.seat_tier),
         error: null, identityVerified: true, verifiedAt: new Date(now).toISOString() };
+      invalidateOtherTiers(memberState, member.seat_tier);
       state.members[connection.id] = memberState;
       displayed.add(connection.id);
       matched.push({ ...memberState, connection });
@@ -71,7 +72,11 @@ export async function runTeamCycle({ config, state, store, client, connections, 
     state.subscription = await client.subscription(config.orgId);
     for (const m of matched) {
       const tier = locate(m.memberId)?.seat_tier;
-      if (tier) m.seatTier = state.members[m.id].seatTier = tier;
+      if (tier) {
+        m.seatTier = state.members[m.id].seatTier = tier;
+        invalidateOtherTiers(state.members[m.id], tier);
+        m.snapshotsByTier = state.members[m.id].snapshotsByTier;
+      }
     }
     await save();
   };
@@ -94,10 +99,15 @@ export async function runTeamCycle({ config, state, store, client, connections, 
     if (locate(member.memberId)?.seat_tier !== tier) throw failure || new Error("Seat change was not confirmed");
   };
   const measure = async (member, forceRefresh = false) => {
+    const tier = member.seatTier;
     const snapshot = parseQuota(await client.usage(member.connection, { forceRefresh }));
-    member.snapshot = state.members[member.id].snapshot = snapshot;
+    const current = (await client.members(config.orgId)).find((m) => m.account?.uuid === member.memberId);
+    if (current?.seat_tier !== tier || !SEAT_TIERS.includes(tier)) throw new Error("Seat tier changed while measuring quota; refresh before rotating");
+    Object.assign(state.members[member.id], recordTierQuota(state.members[member.id], tier, snapshot));
+    member.snapshot = state.members[member.id].snapshot;
+    member.snapshotsByTier = state.members[member.id].snapshotsByTier;
     state.members[member.id].error = null;
-    await save(); return snapshot;
+    await save(); return member.snapshot;
   };
   const activate = (m) => updateConnection(m.id, { isActive: true, testStatus: "active" });
   const deactivate = (m) => updateConnection(m.id, { isActive: false });
@@ -109,7 +119,7 @@ export async function runTeamCycle({ config, state, store, client, connections, 
     const intent = state.pending;
     const mode = intent?.mode || "automatic";
     state.pending = null;
-    await event("seat-transferred", { from: source?.email || null, to: target.email, tier, recovered, mode, reason: intent?.reason, quotaBefore: intent?.quotaBefore, quotaAfter: quotaSummary(target.snapshot) });
+    await event("seat-transferred", { from: source?.email || null, to: target.email, tier, recovered, mode, candidateQuotaConfidence: intent?.candidateQuotaConfidence, previousMeasuredTier: intent?.previousMeasuredTier, reason: intent?.reason, quotaBefore: intent?.quotaBefore, quotaAfter: quotaSummary(target.snapshot) });
   };
 
   // Inspection refreshes data only. It never consumes a grant, changes a seat,
@@ -168,7 +178,7 @@ export async function runTeamCycle({ config, state, store, client, connections, 
     if (!SEAT_TIERS.includes(source.seatTier) || source.seatTier !== manual.expectedTier) throw new Error("Source seat changed. Refresh and select the seat holder again");
     if (!measured.has(source.id)) throw new Error("Could not refresh source quota; no seat was changed");
     if (target.seatTier !== "unassigned") throw new Error("Replacement already has a seat. Refresh suggestions");
-    if (!rankCandidates([target], config, now)[0].ready) throw new Error("Replacement is no longer eligible. Refresh suggestions");
+    if (!rankCandidates([target], config, now, source.seatTier)[0].ready) throw new Error("Replacement is no longer eligible. Refresh suggestions");
     const transferred = await transfer(source, source.seatTier, target.id);
     state.nextRunAt = new Date(Date.now() + config.intervalMinutes * 60000).toISOString();
     await save();
@@ -180,15 +190,15 @@ export async function runTeamCycle({ config, state, store, client, connections, 
   for (const m of matched.filter((m) => m.seatTier === "unassigned")) await deactivate(m);
 
   async function transfer(source, tier, selectedId = null, reason = source ? "Quota threshold reached" : "Fill a free prepaid seat") {
-    const candidates = rankCandidates(matched.filter((m) => m.seatTier === "unassigned" && !attempted.has(m.id) && (!selectedId || m.id === selectedId)), config, now).filter((m) => m.ready);
+    const candidates = rankCandidates(matched.filter((m) => m.seatTier === "unassigned" && !attempted.has(`${tier}:${m.id}`) && (!selectedId || m.id === selectedId)), config, now, tier).filter((m) => m.ready);
     if (!candidates.length) return false; // source keeps seat when nobody can replace it
     for (const candidate of candidates.slice(0, 3)) {
       const target = matched.find((m) => m.id === candidate.id);
-      attempted.add(target.id);
+      attempted.add(`${tier}:${target.id}`);
       state.pending = { type: "seat", orgId: config.orgId, sourceId: source?.id || null,
-        targetId: target.id, tier, reason: selectedId ? "User selected this replacement" : reason, quotaBefore: quotaSummary(source?.snapshot), mode: selectedId ? "manual" : "automatic", sourceActive: source?.connection.isActive === true, startedAt: new Date().toISOString() };
+        targetId: target.id, tier, candidateQuotaConfidence: candidate.quotaConfidence, previousMeasuredTier: target.snapshot?.tier || null, reason: selectedId ? "User selected this replacement" : reason, quotaBefore: quotaSummary(source?.snapshot), mode: selectedId ? "manual" : "automatic", sourceActive: source?.connection.isActive === true, startedAt: new Date().toISOString() };
       await progress("transferring-seat", target.email);
-      if (selectedId) await deactivate(target);
+      await deactivate(target);
       if (source) { await deactivate(source); await assign(source, "unassigned"); }
       await assign(target, tier);
       await progress("verifying-replacement", target.email);
@@ -225,6 +235,10 @@ export async function runTeamCycle({ config, state, store, client, connections, 
       const longKeys = ["weekly", "fable"].filter((key) => before[key]);
       const confirmed = longKeys.every((key) => m.snapshot[key] && m.snapshot[key].remaining > config.threshold && m.snapshot[key].remaining >= before[key].remaining) &&
         longKeys.some((key) => m.snapshot[key].remaining > before[key].remaining);
+      if (confirmed) {
+        state.members[m.id].snapshotsByTier = { [m.seatTier]: state.members[m.id].snapshot };
+        m.snapshotsByTier = state.members[m.id].snapshotsByTier;
+      }
       state.pending = null;
       await event(confirmed ? "limit-reset" : "reset-unconfirmed", { account: m.email, grantId: action.grantId, requestId, error: resetError?.message || null, reason: confirmed ? "Quota increase confirmed after reset" : "Quota reset could not be confirmed", quotaBefore: quotaSummary(before), quotaAfter: quotaSummary(m.snapshot) });
       action = confirmed ? decideAction(m.snapshot, config, now) : { type: "rotate", reason: "Reset not confirmed" };
@@ -239,7 +253,9 @@ export async function runTeamCycle({ config, state, store, client, connections, 
     while (vacancies-- > 0) { if (!await transfer(null, tier)) break; }
   }
   const waiting = matched.filter((m) => m.seatTier === "unassigned");
-  const resetTime = nextReadyAt(waiting, config.threshold, now);
+  const resetTimes = SEAT_TIERS.filter((tier) => (state.subscription?.seat_tier_quantities?.[tier] || 0) > 0)
+    .map((tier) => nextReadyAt(waiting, config.threshold, now, tier)).filter(Boolean).map(Date.parse).filter((time) => time > now + 5000);
+  const resetTime = resetTimes.length ? new Date(Math.min(...resetTimes)).toISOString() : null;
   const regular = now + config.intervalMinutes * 60000;
   state.nextRunAt = new Date(resetTime && Date.parse(resetTime) > now + 5000 ? Math.min(regular, Date.parse(resetTime)) : regular).toISOString();
   await save(); return state;

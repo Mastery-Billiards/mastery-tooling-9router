@@ -37,3 +37,10 @@ describe("Claude Team display semantics", () => {
     expect(remainingResets(null, now)).toBeNull();
   });
 });
+
+
+it("never displays a Standard snapshot as a Premium balance", () => {
+  const m = { targetTier: "team_tier_1", quotaConfidence: "unknown", ready: true, snapshot: { tier: "team_standard", weekly: { remaining: 2 } }, quota: null, score: null };
+  expect(quotaDisplay(m, "weekly", true)).toMatchObject({ remaining: null, label: "Not measured for Premium" });
+  expect(memberStatus(m, true).label).toBe("Verify after assignment");
+});

@@ -151,3 +151,60 @@ describe("Claude Team worker", () => {
     expect(t.state().history.some((e) => e.type === "limit-reset")).toBe(true);
   });
 });
+
+
+describe("tier-aware worker transfers", () => {
+  const old = (tier, left) => ({ tier, session: { remaining: left }, weekly: { remaining: left }, fable: null });
+  it("promotes a Standard-exhausted candidate when actual Premium quota passes", async () => {
+    const t = setup({ candidateLeft: 85 });
+    await t.store.set("state", { members: { target: { snapshot: old("team_standard", 0) } }, history: [] });
+    await t.run();
+    expect(t.remote[1].seat_tier).toBe("team_tier_1");
+    expect(t.state().members.target.snapshot.tier).toBe("team_tier_1");
+    expect(t.state().members.target.snapshotsByTier.team_tier_1.session.remaining).toBe(85);
+    expect(t.operations).toContainEqual(["route", "target", true]);
+  });
+  it("rolls back a cross-tier probe that has low actual Premium quota and blocks repeat probes", async () => {
+    const t = setup({ candidateLeft: 1 });
+    await t.store.set("state", { members: { target: { snapshot: old("team_standard", 0) } }, history: [] });
+    await t.run();
+    expect(t.remote[0].seat_tier).toBe("team_tier_1");
+    expect(t.remote[1].seat_tier).toBe("unassigned");
+    expect(t.state().members.target.snapshotsByTier.team_tier_1.session.remaining).toBe(1);
+    const count = t.client.setSeat.mock.calls.length;
+    await t.run();
+    expect(t.client.setSeat).toHaveBeenCalledTimes(count);
+  });
+  it("retains a known exhausted Premium exclusion after Standard use", async () => {
+    const t = setup({ candidateLeft: 80 });
+    const premium = { ...old("team_tier_1", 0), stale: true };
+    await t.store.set("state", { members: { target: { snapshot: old("team_standard", 90), snapshotsByTier: { team_tier_1: premium } } }, history: [] });
+    await t.run();
+    expect(t.client.setSeat).not.toHaveBeenCalled();
+  });
+  it("rejects measurement if the remote tier changes during the usage read", async () => {
+    const t = setup(); const usage = t.client.usage;
+    t.client.usage = vi.fn(async c => { const result = await usage(c); if (c.id === "source") t.remote[0].seat_tier = "team_standard"; return result; });
+    await expect(t.run({ manual: { sourceId: "source", targetId: "target", expectedTier: "team_tier_1" } })).rejects.toThrow("Could not refresh source quota");
+    expect(t.state().members.source.snapshot).toBeUndefined();
+    expect(t.client.setSeat).not.toHaveBeenCalled();
+  });
+});
+
+
+it("can reject an account for Premium yet verify it for a free Standard seat in the same cycle", async () => {
+  const t = setup({ vacant: 1 });
+  const originalUsage = t.client.usage;
+  t.client.usage = vi.fn(async c => {
+    if (c.id !== "target") return originalUsage(c);
+    const tier = t.remote.find(m => m.account.uuid === "target").seat_tier;
+    return { five_hour: { utilization: tier === "team_tier_1" ? 99 : 10 }, seven_day: { utilization: 20 } };
+  });
+  await t.run();
+  expect(t.remote[0].seat_tier).toBe("team_tier_1");
+  expect(t.remote[1].seat_tier).toBe("team_standard");
+  expect(t.state().members.target.snapshotsByTier.team_tier_1.session.remaining).toBe(1);
+  expect(t.state().members.target.snapshotsByTier.team_tier_1.stale).toBe(true);
+  expect(t.state().members.target.snapshotsByTier.team_standard.session.remaining).toBe(90);
+  expect(t.operations.at(-1)).toEqual(["route", "target", true]);
+});

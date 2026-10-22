@@ -14,13 +14,15 @@ export async function teamView() {
   const state = await teamStore.get("state", { members: {}, history: [] });
   const connections = await accounts();
   const visible = (state.visibleIds || []).map((id) => state.members[id]).filter(Boolean);
-  const waiting = rankCandidates(visible.filter((m) => m.seatTier === "unassigned"), config);
+  const candidatesByTier = Object.fromEntries(SEAT_TIERS.map((tier) => [tier,
+    rankCandidates(visible.filter((m) => m.seatTier === "unassigned"), config, Date.now(), tier).map((m, index) => ({ ...m, rank: index + 1 }))]));
+  const waiting = candidatesByTier.team_standard;
   // Never return raw subscription details: they contain payment information.
   return { config, sessionConfigured: Boolean(loadSession()), running: scheduler.running,
     accounts: connections.map((c) => ({ id: c.id, name: c.name, email: c.email })),
     admin: state.admin, counts: state.counts, purchased: state.subscription?.seat_tier_quantities,
     seated: visible.filter((m) => SEAT_TIERS.includes(m.seatTier)),
-    waiting: waiting.map((m, index) => ({ ...m, rank: index + 1 })),
+    waiting, candidatesByTier,
     excluded: state.excluded || [], history: state.history || [], pending: state.pending || null,
     worker: state.worker || null, lastAutoSuccessAt: state.lastAutoSuccessAt || null,
     lastCheckedAt: state.lastCheckedAt, nextRunAt: state.nextRunAt, error: state.error || null };

@@ -3,11 +3,12 @@ export function memberStatus(member, waiting = false) {
   if (member.identityVerified === false) return { key: "auth", label: "Reconnect OAuth", tone: "danger" };
   if (member.error) return { key: "error", label: "Quota check failed", tone: "warning" };
   if (!waiting) return { key: "seated", label: "Seat assigned", tone: "neutral" };
-  if (member.ready) return { key: "ready", label: member.snapshot ? "Ready to try" : "Ready to verify", tone: "success" };
+  if (member.ready) return { key: "ready", label: member.quotaConfidence === "unknown" ? "Verify after assignment" : member.snapshot ? "Ready to try" : "Ready to verify", tone: "success" };
   return { key: "waiting", label: "Waiting for reset", tone: "warning" };
 }
 
 export function quotaDisplay(member, key, waiting = false) {
+  if (waiting && member.targetTier && !member.quotaSnapshot) return { remaining: null, resetAt: null, source: "unknown", label: `Not measured for ${member.targetTier === "team_tier_1" ? "Premium" : "Standard"}` };
   if (!member.snapshot) return { remaining: null, resetAt: null, source: "unknown", label: "Not measured" };
   const quota = (waiting ? member.quota : member.snapshot)?.[key];
   if (!quota) return { remaining: null, resetAt: null, source: "absent", label: "Not reported" };
@@ -38,14 +39,17 @@ export function seatSummary(data, tier) {
 
 export function recommendationReasons(member, config) {
   if (member.identityVerified === false) return ["OAuth identity is unverified; excluded from allocation."];
-  if (!member.ready) return ["A required quota window is at or below the rotation threshold; waiting for reset."];
+  if (!member.ready) return [`A saved quota window for ${member.targetTier === "team_tier_1" ? "Premium" : member.targetTier ? "Standard" : "this seat"} is at or below the rotation threshold; waiting for reset.`];
   const reasons = [!member.hasReceivedSeat ? "New member: takes priority on the next allocation." : "Previously used account: ranked by weighted remaining quota."];
-  if (!member.snapshot) reasons.push("Quota unknown. The score is provisional, not a measured 100% balance; verification after assignment is required.");
+  if (member.quotaConfidence === "unknown") {
+    reasons.push(`No current measurement for ${member.targetTier === "team_tier_1" ? "Premium" : "Standard"}. Another tier's quota is not used as this tier's balance. Verify after assignment and restore the original seat if quota is too low.`);
+  } else if (!member.snapshot) reasons.push("Quota unknown. The score is provisional, not a measured 100% balance; verification after assignment is required.");
   else {
     const keys = ["fable", "weekly", "session"].filter((key) => member.quota?.[key]);
     const total = keys.reduce((sum, key) => sum + config.weights[key], 0);
     reasons.push(`Estimated score ${member.score.toFixed(1)}: ${keys.map((key) => `${key === "session" ? "5h" : key === "fable" ? "Fable" : "Weekly"} ${total ? Math.round(config.weights[key] / total * 100) : 0}% weight`).join(" · ")}.`);
   }
+  if (member.targetTier) reasons.push("Known usable quota is preferred to unknown quota. New members take priority within each confidence group.");
   reasons.push("Within the same member-priority group, scores less than 5 points apart favor earlier weekly resets. Exact ties use stable account order.");
   return reasons;
 }
@@ -57,7 +61,8 @@ export function automationStatus(data) {
   if (data.error) return { tone: "danger", label: "Last check failed", detail: "Retry the check or review Settings and account authentication." };
   if (data.seated.some((m) => m.error)) return { tone: "warning", label: "Quota checks need attention", detail: "Some seated accounts could not be measured. Refresh data to retry." };
   if (!data.config.enabled) return { tone: "neutral", label: "Paused", detail: "Automatic changes are paused; manual rotation is available." };
-  if (data.seated.some((m) => ["session", "weekly", "fable"].some((key) => m.snapshot?.[key]?.remaining <= data.config.threshold)) && !data.waiting?.some((m) => m.ready)) return { tone: "warning", label: "Waiting for quota reset", detail: "No replacement is ready. Current holders retain their seats until a usable reset or replacement is available." };
+  const exhausted = data.seated.filter((m) => ["session", "weekly", "fable"].some((key) => m.snapshot?.[key]?.remaining <= data.config.threshold));
+  if (exhausted.length && exhausted.every((m) => !(data.candidatesByTier?.[m.seatTier] || data.waiting)?.some((candidate) => candidate.ready))) return { tone: "warning", label: "Waiting for quota reset", detail: "No replacement is ready. Current holders retain their seats until a usable reset or replacement is available." };
   return { tone: "success", label: "Waiting for next check", detail: "Monitoring quota and reset times; healthy seat holders keep their seats." };
 }
 
