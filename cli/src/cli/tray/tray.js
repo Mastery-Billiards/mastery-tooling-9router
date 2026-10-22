@@ -97,7 +97,7 @@ function handleClick(index, options, onAutostartToggle) {
     try {
       const { enableAutoStart, disableAutoStart } = require("./autostart");
       if (enabled) disableAutoStart();
-      else enableAutoStart();
+      else enableAutoStart(options.cliPath);
       onAutostartToggle(!enabled);
     } catch (e) {}
   } else if (index === MENU_INDEX.QUIT) {

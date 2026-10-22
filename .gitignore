@@ -92,6 +92,8 @@ graphify-out/*
 9router-*
 
 # Local sensitive / temp files
+/.fork/
+/claude.ai.har
 .engine-token.txt
 .tmp-prov.json
 .tmp-providers.json
