@@ -3,8 +3,9 @@ import { SEAT_TIERS, parseQuota, ready, rankCandidates, decideAction, nextReadyA
 
 // All mutations pass through this worker. store.set must finish before a remote
 // write: after a crash the next worker reconciles the durable intent first.
-export async function runTeamCycle({ config, state, store, client, connections, updateConnection, now = Date.now(), inspect = false, onlyConnectionId = null }) {
+export async function runTeamCycle({ config, state, store, client, connections, updateConnection, now = Date.now(), inspect = false, onlyConnectionId = null, manual = null, recoverOnly = false }) {
   state = { members: {}, history: [], ...state };
+  if (manual && state.pending) throw new Error("Recover the pending transaction before starting another rotation");
   const save = () => store.set("state", state);
   const event = async (type, details) => {
     state.history.unshift({ id: randomUUID(), at: new Date().toISOString(), type, ...details });
@@ -103,8 +104,9 @@ export async function runTeamCycle({ config, state, store, client, connections, 
     if (source) await deactivate(source);
     await activate(target);
     state.members[target.id].hasReceivedSeat = true;
+    const mode = state.pending?.mode || "automatic";
     state.pending = null;
-    await event("seat-transferred", { from: source?.email || null, to: target.email, tier, recovered });
+    await event("seat-transferred", { from: source?.email || null, to: target.email, tier, recovered, mode });
   };
 
   // Inspection refreshes data only. It never consumes a grant, changes a seat,
@@ -138,6 +140,11 @@ export async function runTeamCycle({ config, state, store, client, connections, 
     } else throw new Error("Seat state changed outside worker; manual reconciliation required");
   }
 
+  if (recoverOnly) {
+    state.nextRunAt = new Date(now + config.intervalMinutes * 60000).toISOString();
+    await save(); return state;
+  }
+
   const measured = new Set();
   for (const member of matched.filter((m) => SEAT_TIERS.includes(m.seatTier))) {
     if (onlyConnectionId && member.id !== onlyConnectionId) continue;
@@ -145,20 +152,38 @@ export async function runTeamCycle({ config, state, store, client, connections, 
     catch (e) { state.members[member.id].error = e.message; }
   }
   if (inspect) { await save(); return state; }
+  const attempted = new Set();
+
+  // Manual requests use the same transfer transaction, but never reset limits,
+  // fill unrelated vacancies, or silently choose a different replacement.
+  if (manual) {
+    const source = matched.find((m) => m.id === manual.sourceId);
+    const target = matched.find((m) => m.id === manual.targetId);
+    if (!source || !target || source.memberId === target.memberId) throw new Error("Both accounts must have verified OAuth in this organization");
+    if (!SEAT_TIERS.includes(source.seatTier) || source.seatTier !== manual.expectedTier) throw new Error("Source seat changed. Refresh and select the seat holder again");
+    if (!measured.has(source.id)) throw new Error("Could not refresh source quota; no seat was changed");
+    if (target.seatTier !== "unassigned") throw new Error("Replacement already has a seat. Refresh suggestions");
+    if (!rankCandidates([target], config, now)[0].ready) throw new Error("Replacement is no longer eligible. Refresh suggestions");
+    const transferred = await transfer(source, source.seatTier, target.id);
+    state.nextRunAt = new Date(Date.now() + config.intervalMinutes * 60000).toISOString();
+    await save();
+    if (!transferred) throw new Error("Replacement quota is too low. The original seat was restored; choose another account");
+    return state;
+  }
 
   // Keep accounts known to have no seat out of the normal routing pool.
   for (const m of matched.filter((m) => m.seatTier === "unassigned")) await deactivate(m);
 
-  const attempted = new Set();
-  async function transfer(source, tier) {
-    const candidates = rankCandidates(matched.filter((m) => m.seatTier === "unassigned" && !attempted.has(m.id)), config, now).filter((m) => m.ready);
+  async function transfer(source, tier, selectedId = null) {
+    const candidates = rankCandidates(matched.filter((m) => m.seatTier === "unassigned" && !attempted.has(m.id) && (!selectedId || m.id === selectedId)), config, now).filter((m) => m.ready);
     if (!candidates.length) return false; // source keeps seat when nobody can replace it
     for (const candidate of candidates.slice(0, 3)) {
       const target = matched.find((m) => m.id === candidate.id);
       attempted.add(target.id);
       state.pending = { type: "seat", orgId: config.orgId, sourceId: source?.id || null,
-        targetId: target.id, tier, sourceActive: source?.connection.isActive === true, startedAt: new Date().toISOString() };
+        targetId: target.id, tier, mode: selectedId ? "manual" : "automatic", sourceActive: source?.connection.isActive === true, startedAt: new Date().toISOString() };
       await save();
+      if (selectedId) await deactivate(target);
       if (source) { await deactivate(source); await assign(source, "unassigned"); }
       await assign(target, tier);
       // Allow for eventual consistency without issuing another mutation.

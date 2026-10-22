@@ -20,9 +20,19 @@ vi.mock("../../src/lib/claudeTeam/store", () => ({
   saveSession: vi.fn(), loadSession: () => "test-saved-session", acquireTeamLock: async () => () => {},
 }));
 vi.mock("../../src/lib/claudeTeam/client", () => ({ createTeamClient: () => mock.client }));
-import { configureTeam } from "../../src/lib/claudeTeam/service.js";
+import { configureTeam, checkTeam } from "../../src/lib/claudeTeam/service.js";
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); mock.values.clear(); });
 describe("saving Claude Team settings", () => {
+  it("allows manual validation and recovery with automation off while rejecting an automatic run", async () => {
+    vi.useFakeTimers();
+    await configureTeam({ config: { adminConnectionId: "admin", orgId: "71f09ff4-2c3e-44da-91de-7917610a646d" } });
+    await expect(checkTeam({ inspect: false })).rejects.toThrow("Enable automatic rotation first");
+    await expect(checkTeam({ inspect: false, manual: { sourceId: "admin", targetId: "missing", expectedTier: "team_tier_1" } })).rejects.toThrow("verified OAuth");
+    const view = await checkTeam({ inspect: false, recoverOnly: true });
+    expect(view.config.enabled).toBe(false);
+    expect(view.pending).toBeNull();
+    expect(mock.client.setSeat).not.toHaveBeenCalled();
+  });
   it("loads actual membership and quota on save without enabling or mutating seats", async () => {
     vi.useFakeTimers();
     const view = await configureTeam({ config: { adminConnectionId: "admin", orgId: "71f09ff4-2c3e-44da-91de-7917610a646d" } });

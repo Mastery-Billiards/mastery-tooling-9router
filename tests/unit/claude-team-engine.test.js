@@ -34,6 +34,48 @@ function setup({ quotaLeft = 2, vacant = 0, candidateLeft = 90, grant = null } =
 }
 
 describe("Claude Team worker", () => {
+  const manual = { sourceId: "source", targetId: "target", expectedTier: "team_tier_1" };
+  it("manually rotates a healthy holder with automation off and leaves empty slots alone", async () => {
+    const t = setup({ quotaLeft: 90, vacant: 1 }); t.config.enabled = false;
+    await t.run({ manual });
+    expect(t.operations.filter((o) => o[0] === "seat")).toEqual([["seat", "source", "unassigned"], ["seat", "target", "team_tier_1"]]);
+    expect(t.state().history[0]).toMatchObject({ type: "seat-transferred", mode: "manual" });
+    expect(t.state().members.target.hasReceivedSeat).toBe(true);
+    expect(t.state().members.target.snapshot.session.remaining).toBe(90);
+    expect(t.state().nextRunAt).toBeTruthy();
+    expect(t.client.reset).not.toHaveBeenCalled();
+  });
+  it("refuses stale seat selection and unverified manual targets without mutations", async () => {
+    const t = setup();
+    await expect(t.run({ manual: { ...manual, expectedTier: "team_standard" } })).rejects.toThrow("Source seat changed");
+    expect(t.operations).toEqual([]);
+    t.client.profile.mockImplementation(async (c) => { if (c.id === "target") throw new Error("401"); return { account: { uuid: c.id }, organization: { uuid: "org" } }; });
+    await expect(t.run({ manual })).rejects.toThrow("verified OAuth");
+    expect(t.operations).toEqual([]);
+  });
+  it("restores the source when the selected manual target has low actual quota", async () => {
+    const t = setup({ quotaLeft: 90, candidateLeft: 1 });
+    await expect(t.run({ manual })).rejects.toThrow("original seat was restored");
+    expect(t.remote[0].seat_tier).toBe("team_tier_1");
+    expect(t.remote[1].seat_tier).toBe("unassigned");
+    expect(t.state().pending).toBeNull();
+    expect(t.operations).not.toContainEqual(["route", "target", true]);
+  });
+  it("recovers an interrupted manual transaction with automation off without allocating other seats", async () => {
+    const t = setup({ quotaLeft: 90, vacant: 1 }); t.config.enabled = false;
+    const original = t.client.setSeat;
+    t.client.setSeat = vi.fn(async (org, id, tier) => { if (id === "target" && tier !== "unassigned") throw new Error("network"); return original(org, id, tier); });
+    await expect(t.run({ manual })).rejects.toThrow("network");
+    expect(t.state().pending.mode).toBe("manual");
+    const count = t.client.setSeat.mock.calls.length;
+    await expect(t.run({ manual })).rejects.toThrow("Recover the pending");
+    expect(t.client.setSeat).toHaveBeenCalledTimes(count);
+    await t.run({ recoverOnly: true });
+    expect(t.state().pending).toBeNull();
+    expect(t.remote[0].seat_tier).toBe("team_tier_1");
+    expect(t.remote[1].seat_tier).toBe("unassigned");
+    expect(t.client.reset).not.toHaveBeenCalled();
+  });
   it("inspect has no remote mutations or routing changes", async () => {
     const t = setup(); await t.run({ inspect: true });
     expect(t.operations).toEqual([]); expect(t.state().members.source.snapshot.session.remaining).toBe(2);

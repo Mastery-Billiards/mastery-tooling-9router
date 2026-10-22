@@ -66,14 +66,15 @@ export async function discoverTeam() {
     .map((m) => ({ id: m.organization.uuid, name: m.organization.name, role: m.role })) };
 }
 
-export async function checkTeam({ inspect = true, scheduled = false, onlyConnectionId = null } = {}) {
+export async function checkTeam({ inspect = true, scheduled = false, onlyConnectionId = null, manual = null, recoverOnly = false } = {}) {
   const unlock = await acquireTeamLock();
   if (!unlock) { if (scheduled) return; throw new Error("Claude Team worker is busy"); }
   scheduler.running = true;
   let workerStarted = false;
   try {
     const config = normalizeConfig(await teamStore.get("config", DEFAULT_CONFIG));
-    if (!inspect && !config.enabled) throw new Error("Enable automatic rotation first");
+    if (!inspect && !config.enabled && !manual && !recoverOnly) throw new Error("Enable automatic rotation first");
+    if (manual && (inspect || !manual.sourceId || !manual.targetId || !SEAT_TIERS.includes(manual.expectedTier))) throw new Error("Select a seat holder and replacement account");
     const session = loadSession();
     if (!session) throw new Error("Configure admin web session first");
     const state = await teamStore.get("state", { members: {}, history: [] });
@@ -84,7 +85,7 @@ export async function checkTeam({ inspect = true, scheduled = false, onlyConnect
     const proxy = admin ? await resolveConnectionProxyConfig(admin.providerSpecificData) : null;
     workerStarted = true;
     await runTeamCycle({ config, state, store: teamStore, client: createTeamClient(session, proxy), connections,
-      updateConnection: updateProviderConnection, inspect, onlyConnectionId });
+      updateConnection: updateProviderConnection, inspect, onlyConnectionId, manual, recoverOnly });
   } catch (e) {
     if (workerStarted) {
       const state = await teamStore.get("state", { members: {}, history: [] });
