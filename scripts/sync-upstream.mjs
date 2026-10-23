@@ -13,6 +13,10 @@ const statusFile = path.join(dir, "update-status.json");
 const lock = path.join(dir, "update.lock");
 const prepareOnly = process.argv.includes("--prepare");
 const localOnly = process.argv.includes("--local");
+// Dashboard-triggered updates inherit the running standalone server's serialized
+// Next config. Never let that point a new build/probe at the previous release.
+const updateEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+  !key.startsWith("__NEXT_PRIVATE_") && !key.startsWith("NEXT_PRIVATE_") && key !== "NEXT_RUNTIME"));
 const logDir = path.join(process.env.DATA_DIR || path.join(os.homedir(), ".9router"), "logs");
 fs.mkdirSync(dir, { recursive: true }); fs.mkdirSync(logDir, { recursive: true });
 const logFd = fs.openSync(path.join(logDir, "sync-upstream.log"), "a", 0o600);
@@ -20,7 +24,7 @@ const writeLog = (text) => fs.writeSync(logFd, `[${new Date().toISOString()}] ${
 const status = (phase, extra = {}) => { writeLog(phase); atomicJson(statusFile, { phase, pid: process.pid, at: new Date().toISOString(), ...extra }); };
 function command(program, args, cwd = root, capture = false, extraEnv = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(program, args, { cwd, env: { ...process.env, ...extraEnv }, stdio: ["ignore", capture ? "pipe" : logFd, logFd] });
+    const child = spawn(program, args, { cwd, env: { ...updateEnv, ...extraEnv }, stdio: ["ignore", capture ? "pipe" : logFd, logFd] });
     let out = "";
     if (capture) child.stdout.on("data", (data) => { out += data; });
     child.on("error", reject);
@@ -100,14 +104,19 @@ try {
     // Next's collection workers initialize the DB while building, too. Keep the
     // whole build on temporary data, not just the candidate health process.
     probeData = fs.mkdtempSync(path.join(os.tmpdir(), "9router-fork-probe-"));
-    try { await command("npm", ["run", "build"], releaseRoot, false, { DATA_DIR: probeData, NEXT_DIST_DIR: ".next", NEXT_TRACING_ROOT_MODE: "project" }); }
-    catch (e) { status("build-failed", { sha, message: "Build failed; old server is still running" }); throw Object.assign(e, { reported: true }); }
+    try {
+      await command("npm", ["run", "build"], releaseRoot, false, { DATA_DIR: probeData, NEXT_DIST_DIR: ".next", NEXT_TRACING_ROOT_MODE: "project" });
+      for (const file of ["server.js", "custom-server.js"]) {
+        if (!fs.existsSync(path.join(releaseRoot, ".next", "standalone", file))) throw new Error(`Standalone build is missing ${file}`);
+      }
+    }
+    catch (e) { status("build-failed", { sha, message: `Build failed: ${e.message}; old server is still running` }); throw Object.assign(e, { reported: true }); }
     const release = path.join(releaseRoot, ".next", "standalone");
     // Verify the build without sharing production DB, settings, seats, or tunnels.
     status("testing", { sha });
     const port = await freePort();
     probe = spawn(process.execPath, [path.join(release, "custom-server.js")], { cwd: release, stdio: ["ignore", logFd, logFd],
-      env: { ...process.env, PORT: String(port), HOSTNAME: "127.0.0.1", DATA_DIR: probeData, NINEROUTER_REPO_ROOT: "", NINEROUTER_FORK_LAUNCHER: "" } });
+      env: { ...updateEnv, PORT: String(port), HOSTNAME: "127.0.0.1", DATA_DIR: probeData, NINEROUTER_REPO_ROOT: "", NINEROUTER_FORK_LAUNCHER: "" } });
     probe.on("error", () => {});
     if (!await waitHealthy(port, () => probe.exitCode === null && !probe.signalCode)) throw new Error("Candidate release did not pass isolated health check");
     await stopChild(probe); probe = null;

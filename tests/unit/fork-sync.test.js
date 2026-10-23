@@ -10,7 +10,7 @@ const repo = fileURLToPath(new URL("../../", import.meta.url));
 const dirs = [];
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
-async function fixture(mode, prepare = false, local = false) {
+async function fixture(mode, prepare = false, local = false, inheritedEnv = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "fork-sync-test-"))); dirs.push(dir);
   fs.mkdirSync(path.join(dir, "scripts")); fs.mkdirSync(path.join(dir, "bin")); fs.mkdirSync(path.join(dir, ".fork"));
   for (const name of ["sync-upstream.mjs", "fork-runtime.cjs", "prune-releases.mjs"]) fs.copyFileSync(path.join(repo, "scripts", name), path.join(dir, "scripts", name));
@@ -28,9 +28,16 @@ if(cmd==='git'){
  if(args[0]==='rev-parse') console.log('1234567890abcdef');
  if(args[0]==='archive') fs.writeFileSync(args.find(x=>x.startsWith('--output=')).slice(9),'');
 }
+if(cmd==='npm') {
+ for (const key of ['__NEXT_PRIVATE_STANDALONE_CONFIG','NEXT_PRIVATE_OUTPUT_TRACE_ROOT','__NEXT_PRIVATE_RENDER_WORKER','NEXT_RUNTIME']) {
+  if(process.env[key]) { console.error('inherited Next runtime config: '+key); process.exit(1); }
+ }
+}
 if(cmd==='npm'&&args[0]==='run'){
  if(mode==='build-failed') process.exit(1);
+ if(mode==='missing-standalone') process.exit(0);
  const out=path.join(process.cwd(),'.next','standalone'); fs.mkdirSync(out,{recursive:true});
+ fs.writeFileSync(path.join(out,'server.js'),'// standalone entry');
  fs.writeFileSync(path.join(out,'custom-server.js'),\"require('http').createServer((q,s)=>{s.setHeader('Content-Type','application/json');s.end(JSON.stringify({ok:true}));}).listen(Number(process.env.PORT),'127.0.0.1');\");
 }
 `;
@@ -39,7 +46,7 @@ if(cmd==='npm'&&args[0]==='run'){
   let code = 0;
   try {
     await exec(process.execPath, [path.join(dir, "scripts", "sync-upstream.mjs"), ...(prepare ? ["--prepare"] : []), ...(local ? ["--local"] : [])], {
-      env: { ...process.env, PATH: path.join(dir, "bin") + path.delimiter + process.env.PATH, DATA_DIR: path.join(dir, "data"), PROBE_MODE: mode, PROBE_CALLS: path.join(dir, "calls") }, timeout: 15000,
+      env: { ...process.env, ...inheritedEnv, PATH: path.join(dir, "bin") + path.delimiter + process.env.PATH, DATA_DIR: path.join(dir, "data"), PROBE_MODE: mode, PROBE_CALLS: path.join(dir, "calls") }, timeout: 15000,
     });
   } catch (e) { code = e.code; }
   return { dir, code, status: JSON.parse(fs.readFileSync(path.join(dir, ".fork", "update-status.json"))), calls: fs.readFileSync(path.join(dir, "calls"), "utf8") };
@@ -69,4 +76,24 @@ describe("detached fork updater", () => {
     expect(fs.realpathSync(path.join(t.dir, ".fork", "current"))).toBe(t.status.release);
     expect(t.calls).not.toContain("git merge"); expect(t.calls).not.toContain("git push");
   });
+});
+
+
+it("isolates dashboard-inherited Next runtime configuration from builds and probes", async () => {
+  const t = await fixture("ok", true, false, {
+    __NEXT_PRIVATE_STANDALONE_CONFIG: JSON.stringify({ outputFileTracingRoot: "/old-release", distDir: ".next" }),
+    NEXT_PRIVATE_OUTPUT_TRACE_ROOT: "/old-release",
+    __NEXT_PRIVATE_RENDER_WORKER: "1",
+    NEXT_RUNTIME: "nodejs",
+  });
+  expect(t.code, JSON.stringify(t.status)).toBe(0);
+  expect(t.status.phase).toBe("prepared");
+});
+
+it("fails before switching the server when a build succeeds without standalone entries", async () => {
+  const t = await fixture("missing-standalone", false, true);
+  expect(t.status.phase).toBe("build-failed");
+  expect(t.status.message).toContain("Standalone build is missing server.js");
+  expect(fs.existsSync(path.join(t.dir, ".fork", "current"))).toBe(false);
+  expect(t.calls).not.toContain("git push");
 });
