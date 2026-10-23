@@ -21,7 +21,8 @@ Session web không tự gia hạn bằng OAuth. Khi phiên hết hạn, nhập p
 - Sau reset, đọc lại cả weekly/Fable; nếu chưa xác nhận thành công thì thử rotate.
 - Thành viên mới chưa từng dùng/nhận seat được ưu tiên ở lần cấp seat tiếp theo. Không lấy seat của người vẫn dùng tốt chỉ vì thêm connection.
 - Điểm = 0.50 × Fable + 0.35 × weekly + 0.15 × 5h. Khi một khung thực tế không tồn tại, bỏ khung đó và chuẩn hóa lại trọng số. Trong nhóm chênh dưới 5 điểm so với điểm cao nhất của nhóm, ưu tiên weekly reset sớm hơn.
-- Không có seat: giữ snapshot, suy ra 100% riêng từng khung sau thời điểm reset. Chưa từng có snapshot được thử với ước tính 100%; đây không phải quota đã xác minh.
+- Lưu snapshot riêng cho Standard/Premium. Với cùng tier, suy ra 100% riêng từng khung sau thời điểm reset; không dùng quota của tier khác làm balance hiện tại. Snapshot tier khác trở thành stale sau khi account nhận/dùng seat mới.
+- Ưu tiên quota đã biết dùng được, sau đó account chưa đo cho tier đích, rồi account chờ reset. Trong mỗi nhóm, member mới được ưu tiên. Quota unknown giữ giá trị null và được xác minh sau khi cấp seat; không hiển thị thành 100%.
 - Không có ứng viên sẵn sàng thì giữ seat cũ; tính lần reset có thể dùng sớm nhất và lưu nextRunAt. Scheduler kiểm tra thời gian mỗi giây và tiếp tục lịch sau restart, không cần mở trang dashboard.
 
 ### Chuyển seat và phục hồi
@@ -36,6 +37,17 @@ Session web không tự gia hạn bằng OAuth. Khi phiên hết hạn, nhập p
 - Lỗi mạng không rõ kết quả để lại pending operation. Lượt chạy tiếp theo kiểm tra trạng thái thực tế, hoàn tất hoặc trả seat về nguồn. Nếu phát hiện trạng thái bị thay đổi ngoài worker, dừng và hiển thị lỗi thay vì tự ý bỏ seat đó.
 - Không lặp lại POST reset có kết quả không rõ sau crash. Đọc quota để đối chiếu trước; lịch sử ghi nhận lần phục hồi.
 - Lịch sử giữ 1.000 sự kiện gần nhất trong scope KV `claudeTeam`. Config, quota snapshot, lịch chạy và pending operation cũng nằm trong scope này; không đổi schema/core routing.
+
+## Thao tác thủ công và giao diện
+
+- Settings mở trong popup; trang chỉ hiển thị account thuộc org đã chọn. Màu quota theo Quota Tracker và bảng dùng theme chung của dashboard.
+- Manual rotation cho phép chọn chủ seat và account thay thế, dùng cùng khóa/intent/kiểm tra quota với automation, kể cả khi automation tắt.
+- Waiting for a seat mặc định All plans, luôn xếp theo độ ưu tiên, không có sort email. All plans ghép thứ hạng theo tier trong từng nhóm quota; không cộng quota/điểm giữa hai tier. Chọn Standard/Premium để xem đúng danh sách dùng khi cấp loại seat đó.
+- Measure waiting quota mở popup chọn account cho mượn seat. Quét toàn bộ account chờ đã xác minh OAuth, không phụ thuộc bộ lọc; lần lượt gán đúng tier để đo, giữ account thử ngoài routing, rồi trả seat về chủ cũ sau mỗi lượt. Không dùng reset. Lưu tiến độ/kết quả và quota theo tier để automation tiếp tục dùng.
+- Intent đo quota có kiểu riêng: khi gián đoạn phải trả seat về nguồn, không hoàn tất như giao dịch rotate. Không đổi cờ ưu tiên member mới chỉ vì đã mượn seat để đo.
+- Reconnect trên trang Claude provider giữ nguyên connection ID, xác minh đúng identity/org trước khi thay credentials. OAuth health được hiển thị trên account lỗi. Authorize mở popup mới giống Add account, không fallback sang tab mới; hỗ trợ copy link để mở profile trình duyệt khác.
+- Worker hiển thị phase/account đang xử lý; lịch sử có lý do, quota trước/sau, lỗi và rollback. Khóa SQLite dùng chung cho reconnect, đo quota, manual và auto rotation.
+- Client thử lại một lần cho lỗi mạng tạm thời và HTTP 502/503/504 của lệnh đọc. Không replay seat/reset writes. Lỗi phân biệt endpoint, network/timeout, Cloudflare, web session và OAuth; không trả token/cookie hay nội dung lỗi remote thô.
 
 ## Chuyển từ bản npm sang fork
 
@@ -89,11 +101,11 @@ Luồng chạy:
 7. Nếu release mới không lên healthy, trỏ lại release trước và yêu cầu supervisor khởi động lại nó.
 8. Chỉ push `origin HEAD` sau khi release mới chạy healthy. Push lỗi có trạng thái riêng: release mới vẫn chạy; có thể chạy lại `git push origin HEAD`.
 
-Log: `DATA_DIR/logs/sync-upstream.log`. Trạng thái: `.fork/update-status.json`. Không tự xóa release cũ; có thể dọn sau khi đã xác nhận không cần rollback. Script dùng shell/Unix signals, phù hợp máy macOS hiện tại.
+Log: `DATA_DIR/logs/sync-upstream.log`. Trạng thái: `.fork/update-status.json`. Sau deploy thành công, chỉ giữ release đang chạy và release trước để rollback; không xóa backup dữ liệu. Script dùng shell/Unix signals, phù hợp máy macOS hiện tại.
 
 Rollback ở đây khôi phục **release ứng dụng**, không tự hạ schema dữ liệu nếu upstream tương lai có migration không tương thích. Cơ chế backup trước migration hiện có của 9router vẫn được giữ.
 
-Banner version vẫn so phiên bản npm upstream; có thể còn hiện nếu npm mới hơn commit upstream/master.
+Bảng Sync custom fork hiển thị commit đang chạy, trạng thái so với origin và upstream, cùng trạng thái cập nhật npm. Phiên bản npm có thể đi trước commit upstream/master; trạng thái so Git được hiển thị riêng.
 
 ## Kiểm thử
 
@@ -102,4 +114,6 @@ Banner version vẫn so phiên bản npm upstream; có thể còn hiện nếu n
 - Regression: reset grants, quota auto-ping và ping schedules hiện có.
 - Smoke: production build; API auth, automation mặc định tắt, và UI trên cổng thử 20129 với DATA_DIR riêng.
 
-Chưa thực hiện đổi seat/reset thật, sync/merge/push thật hoặc thay server đang phục vụ cổng 20128 trong lúc triển khai code.
+Đã build và triển khai fork trên cổng 20128, giữ supervisor/tray và DATA_DIR hiện có. Live inspection, chuyển seat tự động và quét quota bằng seat mượn đã được xác nhận trên môi trường local. Việc merge upstream và rollback khi có migration dữ liệu vẫn cần kiểm tra theo từng bản upstream.
+
+Kiểm tra cho PR: 101 test thuộc 13 file Claude Team/OAuth/fork pass; hai test tích hợp cần quyền mở cổng localhost (sandbox mặc định chặn listen). Production build và live Refresh data cũng đã pass trên bản đang chạy.

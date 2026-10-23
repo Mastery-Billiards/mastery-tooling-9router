@@ -1,5 +1,7 @@
 # Tóm tắt yêu cầu: trang Claude Team và sync fork
 
+> Ghi chú lịch sử trước triển khai. Hướng dẫn và trạng thái hiện tại nằm trong `CLAUDE-TEAM-AND-FORK.md`.
+
 - Ngày: 2026-10-22
 - Nhánh: `taivtse/Rotation-Tracker`
 - Trạng thái: **chưa có code nào được viết.** File này chưa được commit.
