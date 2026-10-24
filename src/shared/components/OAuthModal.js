@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import PropTypes from "prop-types";
 import { Modal, Button, Input } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
+import { openOAuthPopup } from "@/shared/utils/oauthPopup";
 
 // Providers using the dynamic-port local callback proxy.
 // Browser OAuth: popup → auto callback → auto exchange → poll-status.
@@ -35,7 +36,7 @@ const PASTE_TOKEN_PROVIDERS = {
  * - Localhost: Auto callback via popup message
  * - Remote: Manual paste callback URL
  */
-export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, onClose, oauthMeta, idcConfig }) {
+export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, onClose, oauthMeta, idcConfig, reconnectConnection = null }) {
   const [step, setStep] = useState("waiting"); // waiting | input | success | error
   const [authData, setAuthData] = useState(null);
   const [callbackUrl, setCallbackUrl] = useState("");
@@ -94,6 +95,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
           redirectUri: authData.redirectUri,
           codeVerifier: authData.codeVerifier,
           state,
+          ...(reconnectConnection ? { connectionId: reconnectConnection.id } : {}),
           // Zed: thread the login attempt's system_id so the stored
           // connection keeps the id sent to zed.dev (see register-session).
           ...(authData.systemId ? { systemId: authData.systemId } : {}),
@@ -110,7 +112,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       setError(err.message);
       setStep("error");
     }
-  }, [authData, provider, oauthMeta]);
+  }, [authData, provider, oauthMeta, reconnectConnection]);
 
   const completeXaiManualCode = useCallback(async (code) => {
     if (!authData?.state) return;
@@ -443,7 +445,13 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         throw new Error("No authorization URL returned from OAuth provider");
       }
 
-      if (provider === "codex" && codexProxyActive) {
+      if (provider === "claude") {
+        // Always request a separate popup for both Add and Reconnect, including
+        // remote dashboard URLs. A blocked popup never falls back to a tab.
+        popupRef.current = openOAuthPopup(window, data.authUrl);
+        setStep(popupRef.current ? "waiting" : "input");
+        if (!popupRef.current) setError("Popup blocked. Allow popups for 9router, then use Open authorization popup below.");
+      } else if (provider === "codex" && codexProxyActive) {
         // Proxy active: callback will be handled server-side (auto-exchange) or via channels (fallback)
         setStep("waiting");
         popupRef.current = window.open(data.authUrl, "oauth_popup", "width=600,height=700");
@@ -754,7 +762,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   const isXaiProvider = provider === "xai";
   const isKimchiProvider = provider === "kimchi";
   const deviceLoginUrl = deviceData?.verification_uri_complete || deviceData?.verification_uri || "";
-  const modalTitle = isXaiProvider ? "Connect Grok Build OAuth" : `Connect ${providerInfo.name}`;
+  const modalTitle = reconnectConnection ? `Reconnect ${providerInfo.name}` : isXaiProvider ? "Connect Grok Build OAuth" : `Connect ${providerInfo.name}`;
   const manualPlaceholder = isXaiProvider
     ? "http://127.0.0.1:56121/callback?code=... or copied code"
     : isKimchiProvider
@@ -764,6 +772,8 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   return (
     <Modal isOpen={isOpen} title={modalTitle} onClose={handleClose} size="lg">
       <div className="flex flex-col gap-4">
+        {reconnectConnection && <div className="rounded-lg border border-border p-3 text-sm"><b className="break-all">{reconnectConnection.email || reconnectConnection.name}</b><p className="mt-1 text-text-muted">Sign in to this same account and organization. Only its OAuth credentials are replaced; its ID, proxy, priority, history and enabled/disabled state are preserved.</p></div>}
+        {provider === "claude" && authData?.authUrl && step !== "success" && <Button variant="secondary" onClick={() => { popupRef.current = openOAuthPopup(window, authData.authUrl); setStep(popupRef.current ? "waiting" : "input"); setError(popupRef.current ? null : "Popup blocked. Allow popups for 9router and try again."); }}>Open authorization popup</Button>}
         {/* Proxy OAuth (trae/windsurf/zed): browser flow; paste-token only when configured */}
         {PROXY_OAUTH_PROVIDERS.has(provider) && (step === "waiting" || step === "input" || step === "error") && (
           <>
@@ -998,6 +1008,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
 }
 
 OAuthModal.propTypes = {
+  reconnectConnection: PropTypes.shape({ id: PropTypes.string.isRequired, email: PropTypes.string, name: PropTypes.string }),
   isOpen: PropTypes.bool.isRequired,
   provider: PropTypes.string,
   providerInfo: PropTypes.shape({ name: PropTypes.string }),
