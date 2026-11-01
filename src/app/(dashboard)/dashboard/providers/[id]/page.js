@@ -25,9 +25,13 @@ import BulkImportCodexModal from "./BulkImportCodexModal";
 import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
 import CustomConfigCard from "./CustomConfigCard";
 import AutoPingScheduleModal from "./AutoPingScheduleModal";
+import WebLoginButton, { WEB_LOGIN_PROVIDERS } from "../components/WebLoginButton.js";
+import MinimaxLeaseButton from "../components/MinimaxLeaseButton.js";
 import { getScheduleSlotLabels } from "@/shared/services/quotaPingSchedule";
 
 const ONE_BY_ONE_DELAY_MS = 1000;
+
+const MCODE_LEASE_PROVIDERS = new Set(["minimax-code", "minimax-code-global"]);
 
 const AUTO_PING_SETTINGS_KEYS = {
   claude: "claudeAutoPing",
@@ -48,6 +52,7 @@ export default function ProviderDetailPage() {
   const [providerNode, setProviderNode] = useState(null);
   const [proxyPools, setProxyPools] = useState([]);
   const [showOAuthModal, setShowOAuthModal] = useState(false);
+  const [reconnectConnection, setReconnectConnection] = useState(null);
   const [showXiaomiMimoModal, setShowXiaomiMimoModal] = useState(false);
   const [showIFlowCookieModal, setShowIFlowCookieModal] = useState(false);
   const [showAddApiKeyModal, setShowAddApiKeyModal] = useState(false);
@@ -94,6 +99,7 @@ export default function ProviderDetailPage() {
   const AG_RISK_STORAGE_KEY = "ag_risk_confirmed";
 
   const openOAuthConnection = () => {
+    setReconnectConnection(null);
     setShowOAuthModal(true);
   };
 
@@ -835,6 +841,7 @@ export default function ProviderDetailPage() {
   const handleOAuthSuccess = () => {
     fetchConnections();
     setShowOAuthModal(false);
+    setReconnectConnection(null);
   };
 
   const handleIFlowCookieSuccess = () => {
@@ -1043,6 +1050,7 @@ export default function ProviderDetailPage() {
                 connection={conn}
                 proxyPools={proxyPools}
                 isOAuth={isOAuth}
+                onReconnect={providerId === "claude" && conn.authType === "oauth" ? () => { setReconnectConnection(conn); setShowOAuthModal(true); } : undefined}
                 isFirst={index === 0}
                 isLast={index === connections.length - 1}
                 onMoveUp={() => handleSwapPriority(index, index - 1)}
@@ -1621,6 +1629,12 @@ export default function ProviderDetailPage() {
                   </>
                 ) : (
                   <>
+                    {!isCompatible && WEB_LOGIN_PROVIDERS.has(providerId) && (
+                      <WebLoginButton providerId={providerId} onConnected={fetchConnections} />
+                    )}
+                    {!isCompatible && MCODE_LEASE_PROVIDERS.has(providerId) && (
+                      <MinimaxLeaseButton providerId={providerId} onConnected={fetchConnections} />
+                    )}
                     {!isCompatible && providerId === "iflow" && (
                       <Button size="sm" icon="cookie" variant="secondary" onClick={() => setShowIFlowCookieModal(true)}>
                         Cookie
@@ -1681,6 +1695,12 @@ export default function ProviderDetailPage() {
               {connectionsList}
               {!isCompatible && (
                 <div className="mt-4 grid grid-cols-1 gap-2 sm:flex">
+                  {WEB_LOGIN_PROVIDERS.has(providerId) && (
+                    <WebLoginButton providerId={providerId} onConnected={fetchConnections} />
+                  )}
+                  {MCODE_LEASE_PROVIDERS.has(providerId) && (
+                    <MinimaxLeaseButton providerId={providerId} onConnected={fetchConnections} />
+                  )}
                   {providerId === "iflow" && (
                     <Button
                       size="sm"
@@ -1866,11 +1886,13 @@ export default function ProviderDetailPage() {
         />
       ) : (
         <OAuthModal
+          key={reconnectConnection?.id || "add"}
+          reconnectConnection={reconnectConnection}
           isOpen={showOAuthModal}
           provider={providerId}
           providerInfo={providerInfo}
           onSuccess={handleOAuthSuccess}
-          onClose={() => setShowOAuthModal(false)}
+          onClose={() => { setShowOAuthModal(false); setReconnectConnection(null); }}
         />
       )}
 
