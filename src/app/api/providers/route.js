@@ -10,6 +10,8 @@ import { APIKEY_PROVIDERS } from "@/shared/constants/config";
 import { AI_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider } from "@/shared/constants/providers";
 import { normalizeProviderId, normalizeProviderSpecificData } from "@/lib/providerNormalization";
 import { toProviderConnectionResponse } from "@/lib/providerConnectionResponse";
+import { teamStore } from "@/lib/claudeTeam/store";
+import { oauthIssue } from "@/lib/oauth/health";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +53,7 @@ async function normalizeProxyPoolId(proxyPoolId) {
 export async function GET() {
   try {
     const connections = await getProviderConnections();
+    const teamState = connections.some((c) => c.provider === "claude") ? await teamStore.get("state", {}) : {};
 
     // Build nodeNameMap for compatible providers (id → name)
     let nodeNameMap = {};
@@ -70,6 +73,7 @@ export async function GET() {
       return {
         ...toProviderConnectionResponse(c),
         name,
+        oauthIssue: c.provider === "claude" ? oauthIssue(c, teamState.members?.[c.id]) : null,
       };
     });
 

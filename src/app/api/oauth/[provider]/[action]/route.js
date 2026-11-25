@@ -8,6 +8,9 @@ import {
   pollForToken
 } from "@/lib/oauth/providers";
 import { createProviderConnection } from "@/models";
+import { reconnectClaude } from "@/lib/oauth/reconnectClaude";
+import { getProviderConnections } from "@/lib/localDb";
+import { requestLease, requestStatus, resolveLeaseEndpoint, resolveMcodeDataDir, AuthLeaseError } from "open-sse/services/minimaxCodeLease.js";
 import { readDesktopPassToken } from "open-sse/shared/mimoAccount.js";
 import {
   startCodexProxy,
@@ -285,6 +288,24 @@ export async function GET(request, { params }) {
       });
     }
 
+    if (action === "lease-status") {
+      // MiniMax Code desktop broker probe: is the desktop app installed,
+      // running and signed in on this machine? Read-only — leases nothing.
+      const MCODE_LEASE_PROVIDERS = ["minimax-code", "minimax-code-global"];
+      if (!MCODE_LEASE_PROVIDERS.includes(provider)) {
+        return NextResponse.json({ error: "lease-status only supported for minimax-code/minimax-code-global" }, { status: 400 });
+      }
+      const override = searchParams.get("data_dir");
+      const dataDir = override ? String(override).trim() : resolveMcodeDataDir(null);
+      try {
+        const status = await requestStatus(dataDir);
+        return NextResponse.json({ found: true, dataDir, ...status });
+      } catch (error) {
+        const code = error instanceof AuthLeaseError ? error.code : "INTERNAL_ERROR";
+        return NextResponse.json({ found: false, dataDir, error: code, message: error.message });
+      }
+    }
+
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (error) {
     console.log("OAuth GET error:", error);
@@ -304,6 +325,42 @@ export async function POST(request, { params }) {
       return NextResponse.json({ error: "Invalid or empty request body" }, { status: 400 });
     }
 
+    if (action === "lease-connect") {
+      // MiniMax Code: create a connection that borrows the desktop app's
+      // sign-in over the local auth-lease pipe (authType "mcode-lease"). The
+      // router stores no tokens for it — the desktop broker owns refresh.
+      const MCODE_LEASE_PROVIDERS = ["minimax-code", "minimax-code-global"];
+      if (!MCODE_LEASE_PROVIDERS.includes(provider)) {
+        return NextResponse.json({ error: "lease-connect only supported for minimax-code/minimax-code-global" }, { status: 400 });
+      }
+      const dataDir = body?.dataDir ? String(body.dataDir).trim() : resolveMcodeDataDir(null);
+      try {
+        // Validate availability up front so the user gets the broker's exact
+        // failure reason instead of a dead connection.
+        await requestLease(dataDir);
+      } catch (error) {
+        const code = error instanceof AuthLeaseError ? error.code : "INTERNAL_ERROR";
+        return NextResponse.json({ error: error.message, code }, { status: 409 });
+      }
+
+      // Idempotent: one lease connection per (provider, data dir).
+      resolveLeaseEndpoint(dataDir); // throws INVALID_REQUEST on a non-absolute override
+      const existing = (await getProviderConnections({ provider }))
+        .find((c) => c.authType === "mcode-lease" && resolveMcodeDataDir(c) === dataDir);
+      if (existing) {
+        return NextResponse.json({ success: true, connection: { id: existing.id, provider: existing.provider }, reused: true });
+      }
+
+      const connection = await createProviderConnection({
+        provider,
+        authType: "mcode-lease",
+        name: provider === "minimax-code-global" ? "MiniMax Desktop (Lease, Global)" : "MiniMax Desktop (Lease)",
+        providerSpecificData: { mcodeDataDir: dataDir },
+        testStatus: "active",
+      });
+      return NextResponse.json({ success: true, connection: { id: connection.id, provider: connection.provider } });
+    }
+
     if (action === "register-session") {
       // Register proxy session out of URL query (state) + body (codeVerifier).
       // Zed's codeVerifier encodes the RSA private key — must stay out of URL/logs.
@@ -320,6 +377,7 @@ export async function POST(request, { params }) {
 
     if (action === "exchange") {
       const { code, redirectUri, codeVerifier, state, meta, systemId } = body;
+      if (body.connectionId && provider !== "claude") return NextResponse.json({ error: "Reconnect currently supports Claude OAuth only" }, { status: 400 });
 
       // Xiaomi MiMo: no token exchange needed — the callback already decrypted the sk.
       // Just read the session result and create the connection.
@@ -466,13 +524,14 @@ export async function POST(request, { params }) {
       // Exchange code for tokens (meta carries provider-specific params, e.g. gitlab clientId/baseUrl).
       // systemId (Zed) is merged into meta so the login attempt's own id is
       // used instead of a freshly prepared one. Ignored by other providers.
-      const tokenData = await exchangeTokens(provider, code, redirectUri, codeVerifier, state, {
+      const exchange = () => exchangeTokens(provider, code, redirectUri, codeVerifier, state, {
         ...(meta || {}),
         ...(systemId ? { systemId } : {}),
       });
 
       // Save to database
-      const connection = await createProviderConnection({
+      const tokenData = body.connectionId ? null : await exchange();
+      const connection = body.connectionId ? await reconnectClaude(body.connectionId, exchange) : await createProviderConnection({
         provider,
         authType: "oauth",
         ...tokenData,

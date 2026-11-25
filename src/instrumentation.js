@@ -10,5 +10,10 @@ export async function register() {
 
     const { startModelCatalogSync } = await import("@/lib/modelCatalog/sync.js");
     startModelCatalogSync();
+
+    if (process.env.NEXT_PHASE !== "phase-production-build") {
+      const { startTeamScheduler } = await import("@/lib/claudeTeam/service");
+      startTeamScheduler();
+    }
   }
 }
