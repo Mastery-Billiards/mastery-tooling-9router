@@ -57,8 +57,8 @@ describe("Claude Team policy", () => {
     b.weekly.resetAt = null;
     expect(nextReadyAt([{ snapshot: b }], 5, now)).toBeNull();
   });
-  it("waits down to 1% when an eligible reset exists", () => {
-    expect(decideAction(quota(50, 5, 50, [grant()]), { ...C, expiringReset: false }, now).type).toBe("wait-reset");
+  it("uses an available reset at the rotation threshold when 5h quota remains", () => {
+    expect(decideAction(quota(50, 5, 50, [grant()]), { ...C, expiringReset: false }, now).type).toBe("reset");
     expect(decideAction(quota(50, 50, 1, [grant()]), C, now).type).toBe("reset");
   });
   it("waits below 1% for limit-only grants; uses when server marks usable", () => {

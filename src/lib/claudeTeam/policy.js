@@ -140,7 +140,9 @@ export function decideAction(quota, config, now = Date.now()) {
     .sort((a, b) => (Date.parse(a.ends_at) || Infinity) - (Date.parse(b.ends_at) || Infinity));
   const almostEmpty = [quota.weekly, quota.fable].filter(Boolean).some((q) => q.remaining < 20);
   const expiredSoon = (g) => config.expiringReset && almostEmpty && Date.parse(g.ends_at) - now < 86400000;
-  const usable = grants.find((g) => g.usable_now && (resetLow || expiredSoon(g)));
+  // Spend a usable grant when it can keep this seat serving past the rotation threshold.
+  const resetAvoidsRotation = lowLong && quota.session.remaining > config.threshold;
+  const usable = grants.find((g) => g.usable_now && (resetLow || resetAvoidsRotation || expiredSoon(g)));
   if (usable) return { type: "reset", grantId: usable.id };
   if (quota.session.remaining <= config.threshold) return { type: "rotate", reason: "5h" };
   if (lowLong && grants.some((g) => g.usable_now || (g.use_requires_limit && !resetLow))) return { type: "wait-reset" };

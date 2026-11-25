@@ -9,6 +9,17 @@ const org = "71f09ff4-2c3e-44da-91de-7917610a646d";
 const response = (data) => ({ ok: true, json: async () => data });
 
 describe("Claude Team API client", () => {
+  it("retries a rejected OAuth profile using a refreshed access token", async () => {
+    const connection = { id: "account", accessToken: "old", refreshToken: "refresh" };
+    refreshAndUpdateCredentials.mockResolvedValueOnce({ connection })
+      .mockResolvedValueOnce({ connection: { ...connection, accessToken: "new" } });
+    const fetch = vi.fn().mockResolvedValueOnce({ ok: false, status: 401 })
+      .mockResolvedValueOnce(response({ account: { uuid: "account" } }));
+    await expect(createTeamClient("web", null, fetch).profile(connection))
+      .resolves.toEqual({ account: { uuid: "account" } });
+    expect(refreshAndUpdateCredentials).toHaveBeenLastCalledWith(connection, true, null);
+    expect(fetch.mock.calls.map(([, options]) => options.headers.Authorization)).toEqual(["Bearer old", "Bearer new"]);
+  });
   it("uses the web session for admin endpoints and follows member pagination", async () => {
     const fetch = vi.fn().mockResolvedValueOnce(response({ data: [{ member: { account: { uuid: "one" } } }], pagination: { has_more: true } }))
       .mockResolvedValueOnce(response({ data: [{ member: { account: { uuid: "two" } } }], pagination: { has_more: false } }));

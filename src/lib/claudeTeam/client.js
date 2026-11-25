@@ -37,7 +37,7 @@ export function createTeamClient(sessionKey, adminProxy = null, fetcher = proxyA
         }
         if (admin && response.status === 401) throw new Error(`${label}: web session expired (HTTP 401). Update the admin web session in Settings; OAuth reconnect is separate.`);
         if (admin && response.status === 403) throw new Error(`${label}: access denied (HTTP 403). Check the selected admin, organization and admin web session in Settings.`);
-        throw new Error(`${label}: Claude API HTTP ${response.status}`);
+        throw Object.assign(new Error(`${label}: Claude API HTTP ${response.status}`), { status: response.status });
       }
       try { return await response.json(); }
       catch (error) {
@@ -71,6 +71,25 @@ export function createTeamClient(sessionKey, adminProxy = null, fetcher = proxyA
       "anthropic-version": "2023-06-01", "User-Agent": `claude-cli/${CLAUDE_CLI_VERSION} (external, cli)`, "Content-Type": "application/json",
     } };
   }
+  async function oauthRead(connection, url, forceRefresh = false) {
+    const { current, headers, proxy } = await credentials(connection, forceRefresh);
+    try {
+      return await json(url, { headers }, proxy);
+    } catch (error) {
+      if (error.status !== 401) throw error;
+      if (!forceRefresh && current.refreshToken) {
+        const retry = await credentials(current, true);
+        if (retry.current.accessToken !== current.accessToken) {
+          try {
+            return await json(url, { headers: retry.headers }, retry.proxy);
+          } catch (retryError) {
+            if (retryError.status !== 401) throw retryError;
+          }
+        }
+      }
+      throw new Error(`${error.message}. Reconnect the Claude OAuth account in Providers → Claude.`);
+    }
+  }
   return {
     account: () => web("account"),
     subscription: (org) => web(orgPath(org, "subscription_details")),
@@ -90,12 +109,10 @@ export function createTeamClient(sessionKey, adminProxy = null, fetcher = proxyA
       return web(orgPath(org, `members/${memberId}`), { method: "PUT", body: JSON.stringify({ seat_tier: tier }) });
     },
     async profile(connection) {
-      const { headers, proxy } = await credentials(connection);
-      return json("https://api.anthropic.com/api/oauth/profile", { headers }, proxy);
+      return oauthRead(connection, "https://api.anthropic.com/api/oauth/profile");
     },
     async usage(connection, { forceRefresh = false } = {}) {
-      const { headers, proxy } = await credentials(connection, forceRefresh);
-      return json("https://api.anthropic.com/api/oauth/usage?cedar_ember=1", { headers }, proxy);
+      return oauthRead(connection, "https://api.anthropic.com/api/oauth/usage?cedar_ember=1", forceRefresh);
     },
     async reset(connection, org, grantId, requestId) {
       const { headers, proxy } = await credentials(connection);
